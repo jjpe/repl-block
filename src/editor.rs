@@ -14,12 +14,94 @@ use crossterm::{
     terminal::ClearType,
 };
 use itertools::Itertools;
-// use log::{error, info};
 use std::io::{Stdout, Write};
 
 
-#[derive(Debug)]
-pub struct Editor<W: Write> {
+type Evaluator<'eval> =
+    dyn for<'src> FnMut(&'src str) -> ReplBlockResult<()> + 'eval;
+
+pub struct EditorBuilder<'eval, W: Write> {
+    sink: W,
+    default_prompt: Vec<StyledContent<char>>,
+    continue_prompt: Vec<StyledContent<char>>,
+    history_filepath: Utf8PathBuf,
+    evaluator: Box<Evaluator<'eval>>,
+}
+
+impl<'eval> Default for EditorBuilder<'eval, Stdout> {
+    fn default() -> EditorBuilder<'eval, Stdout> {
+        #[inline(always)]
+        fn nop<'eval>() -> Box<Evaluator<'eval>> {
+            Box::new(|_| Ok(()))
+        }
+        EditorBuilder {
+            sink: std::io::stdout(),
+            default_prompt:  vec!['■'.yellow(), '>'.green().bold(), ' '.reset()],
+            continue_prompt: vec!['ꞏ'.yellow(), 'ꞏ'.yellow(),       ' '.reset()],
+            history_filepath: Utf8PathBuf::new(),
+            evaluator: nop(),
+        }
+    }
+}
+
+impl<'eval, W: Write> EditorBuilder<'eval, W> {
+    pub fn sink<S: Write>(self, sink: S) -> EditorBuilder<'eval, S> {
+        EditorBuilder {
+            sink,
+            default_prompt: self.default_prompt,
+            continue_prompt: self.continue_prompt,
+            history_filepath: self.history_filepath,
+            evaluator: self.evaluator,
+        }
+    }
+
+    pub fn default_prompt(mut self, prompt: Vec<StyledContent<char>>) -> Self {
+        self.default_prompt = prompt;
+        self
+    }
+
+    pub fn continue_prompt(mut self, prompt: Vec<StyledContent<char>>) -> Self {
+        self.continue_prompt = prompt;
+        self
+    }
+
+    pub fn history_filepath(mut self, filepath: impl AsRef<Utf8Path>) -> Self {
+        self.history_filepath = filepath.as_ref().to_path_buf();
+        self
+    }
+
+    pub fn evaluator<E>(mut self, evaluator: E) -> Self
+    where
+        E: for<'src> FnMut(&'src str) -> ReplBlockResult<()> + 'eval
+    {
+        self.evaluator = Box::new(evaluator);
+        self
+    }
+
+    pub fn build(self) -> ReplBlockResult<Editor<'eval, W>> {
+        assert_eq!(
+            self.default_prompt.len(), self.continue_prompt.len(),
+            "PRECONDITION FAILED: default_prompt.len() != continue_prompt.len()"
+        );
+        let mut editor = Editor::new(
+            self.sink,
+            self.history_filepath,
+            self.evaluator,
+            self.default_prompt,
+            self.continue_prompt,
+        )?;
+        // The REPL operates in raw mode.  Raw mode is also explicitly turned
+        // on before reading input, and turned off again afterwards.
+        terminal::enable_raw_mode()?;
+        editor.write_default_prompt(FlushPolicy::Flush)?;
+        Ok(editor)
+    }
+}
+
+
+
+// #[derive(Debug)] TODO write manual impl
+pub struct Editor<'eval, W: Write> {
     sink: W,
     state: State,
     /// The height of the input area, in lines
@@ -28,16 +110,31 @@ pub struct Editor<W: Write> {
     history: History,
     /// The filepath of the history file
     history_filepath: Utf8PathBuf,
+    /// The fn used to perform the Evaluate step of the REPL
+    evaluator: Box<Evaluator<'eval>>,
+    /// The default command prompt
+    default_prompt: Vec<StyledContent<char>>,
+    /// The command prompt used for command continuations
+    continue_prompt: Vec<StyledContent<char>>,
 }
 
-impl Editor<Stdout> {
-    pub fn new(history_filepath: impl AsRef<Utf8Path>) -> ReplBlockResult<Self> {
+impl<'eval, W: Write> Editor<'eval, W> {
+    fn new(
+        sink: W,
+        history_filepath: impl AsRef<Utf8Path>,
+        evaluator: Box<Evaluator<'eval>>,
+        default_prompt: Vec<StyledContent<char>>,
+        continue_prompt: Vec<StyledContent<char>>,
+    ) -> ReplBlockResult<Editor<'eval, W>> {
         let mut editor = Self {
-            sink: std::io::stdout(),
+            sink,
             state: State::Edit(EditState { buffer: Cmd::default() }),
             height: 1,
             history: History::read_from_file(history_filepath.as_ref())?,
             history_filepath: history_filepath.as_ref().to_path_buf(),
+            evaluator,
+            default_prompt,
+            continue_prompt,
         };
         editor.sink.flush()?;
         execute!(
@@ -51,23 +148,6 @@ impl Editor<Stdout> {
     }
 }
 
-lazy_static::lazy_static! {
-    pub static ref DEFAULT_PROMPT: Vec<StyledContent<char>> = vec![
-        '∇'.yellow(),
-        '>'.green().bold(),
-        ' '.reset(),
-    ];
-    pub static ref CONTINUE_PROMPT: Vec<StyledContent<char>> = vec![
-        '.'.yellow(),
-        '.'.yellow(),
-        ' '.reset(),
-    ];
-    pub static ref PROMPT_LEN: u16 = DEFAULT_PROMPT.len() as u16;
-    pub static ref __PROMPT_ASSERTIONS__: () = {
-        assert_eq!(*PROMPT_LEN, DEFAULT_PROMPT.len() as u16);
-        assert_eq!(*PROMPT_LEN, CONTINUE_PROMPT.len() as u16);
-    };
-}
 
 // This is a macro rather than a method of Editor due to the borrowck
 // issues that would ensue when trying to use that method while also
@@ -80,9 +160,10 @@ macro_rules! repaint_input_area {
         let (old, new): (&Cmd, &Cmd) = ({ $old }, { $new });
         let origin = $editor.origin()?;
         let editor_width = $editor.dimensions()?.width;
-        let num_lines_old = old.count_logical_lines(editor_width, *PROMPT_LEN);
-        let num_lines_new = new.count_logical_lines(editor_width, *PROMPT_LEN);
-        let lines_new = new.logical_lines(editor_width, *PROMPT_LEN);
+        let prompt_len = $editor.prompt_len();
+        let num_lines_old = old.count_logical_lines(editor_width, prompt_len);
+        let num_lines_new = new.count_logical_lines(editor_width, prompt_len);
+        let lines_new = new.logical_lines(editor_width, prompt_len);
         // The editor height can grow but never shrinks until a Cmd is evaluated
         $editor.height = std::cmp::max($editor.height, num_lines_new);
         for offset in 0..num_lines_old { // Clear all the old lines
@@ -119,65 +200,14 @@ macro_rules! repaint_input_area {
     }};
 }
 
-impl<W: Write> Editor<W> {
-    pub fn write_default_prompt(
-        &mut self,
-        flush_policy: FlushPolicy,
-    ) -> ReplBlockResult<&mut Self> {
-        if flush_policy == FlushPolicy::Flush {
-            execute!(
-                self.sink,
-                cursor::MoveToColumn(0),
-                style::Print(DEFAULT_PROMPT[0]),
-                style::Print(DEFAULT_PROMPT[1]),
-                style::Print(DEFAULT_PROMPT[2]),
-            )?;
-        } else {
-            queue!(
-                self.sink,
-                cursor::MoveToColumn(0),
-                style::Print(DEFAULT_PROMPT[0]),
-                style::Print(DEFAULT_PROMPT[1]),
-                style::Print(DEFAULT_PROMPT[2]),
-            )?;
-        }
-        Ok(self)
-    }
-
-    pub fn write_continue_prompt(
-        &mut self,
-        flush_policy: FlushPolicy,
-    ) -> ReplBlockResult<()> {
-        if flush_policy == FlushPolicy::Flush {
-            execute!(
-                self.sink,
-                cursor::MoveToColumn(0),
-                style::Print(CONTINUE_PROMPT[0]),
-                style::Print(CONTINUE_PROMPT[1]),
-                style::Print(CONTINUE_PROMPT[2]),
-            )?;
-        } else {
-            queue!(
-                self.sink,
-                cursor::MoveToColumn(0),
-                style::Print(CONTINUE_PROMPT[0]),
-                style::Print(CONTINUE_PROMPT[1]),
-                style::Print(CONTINUE_PROMPT[2]),
-            )?;
-        }
-        Ok(())
-    }
-
-    pub fn run_event_loop(
-        &mut self,
-        evaluate: &mut impl FnMut(&str) -> ReplBlockResult<()>
-    ) -> ReplBlockResult<()> {
+impl<'eval, W: Write> Editor<'eval, W> {
+    pub fn run_event_loop(&mut self) -> ReplBlockResult<()> {
         loop { match event::read()? {
             Event::Key(key!(CONTROL-'c')) => self.cmd_nop()?,
 
             // Control application lifecycle:
             Event::Key(key!(CONTROL-'d'))    => self.cmd_exit_repl()?,
-            Event::Key(key!(@special Enter)) => self.cmd_eval(evaluate)?,
+            Event::Key(key!(@special Enter)) => self.cmd_eval()?,
 
             // Navigation:
             Event::Key(key!(CONTROL-'p'))    => self.cmd_navigate_up()?,
@@ -223,6 +253,35 @@ impl<W: Write> Editor<W> {
         }}
     }
 
+    pub fn write_default_prompt(
+        &mut self,
+        flush_policy: FlushPolicy,
+    ) -> ReplBlockResult<&mut Self> {
+        queue!(self.sink, cursor::MoveToColumn(0))?;
+        for i in 0..self.default_prompt.len() {
+            queue!(self.sink, style::Print(self.default_prompt[i]))?;
+        }
+        if let FlushPolicy::Flush = flush_policy {
+            self.sink.flush()?;
+        }
+        Ok(self)
+    }
+
+    pub fn write_continue_prompt(
+        &mut self,
+        flush_policy: FlushPolicy,
+    ) -> ReplBlockResult<()> {
+        queue!(self.sink, cursor::MoveToColumn(0))?;
+        for i in 0..self.continue_prompt.len() {
+            queue!(self.sink, style::Print(self.continue_prompt[i]))?;
+        }
+        if let FlushPolicy::Flush = flush_policy {
+            self.sink.flush()?;
+        }
+        Ok(())
+    }
+
+
     /// Return the global (col, row)-coordinates of the top-left corner of `self`.
     fn origin(&self) -> ReplBlockResult<Coords> {
         let (_term_width, term_height) = terminal::size()?;
@@ -233,7 +292,7 @@ impl<W: Write> Editor<W> {
     // /// The top left cell is represented `(1, 1)`.
     // fn content_origin(&self) -> ReplResult<Coords> {
     //     let (_term_width, term_height) = terminal::size()?;
-    //     Ok(Coords { x: *PROMPT_LEN, y: term_height - self.height })
+    //     Ok(Coords { x: *self.prompt_len(), y: term_height - self.height })
     // }
 
     /// Return the (col, row)-coordinates of the cursor,
@@ -248,6 +307,14 @@ impl<W: Write> Editor<W> {
     fn dimensions(&self) -> ReplBlockResult<Dims> {
         let (term_width, _term_height) = terminal::size()?;
         Ok(Dims { width: term_width, height: self.height })
+    }
+
+    fn prompt_len(&self) -> u16 {
+        assert_eq!(
+            self.default_prompt.len(), self.continue_prompt.len(),
+            "PRECONDITION FAILED: default_prompt.len() != continue_prompt.len()"
+        );
+        self.default_prompt.len() as u16
     }
 
 
@@ -275,11 +342,12 @@ impl<W: Write> Editor<W> {
             _origin: Coords,
             cursor: Coords,
             editor_dims: Dims,
+            prompt_len: u16
         ) -> ReplBlockResult<()> {
             if cmd.is_empty() {
                 return Ok(()); // NOP, row does not exist
             }
-            let llines = cmd.logical_lines(editor_dims.width, *PROMPT_LEN);
+            let llines = cmd.logical_lines(editor_dims.width, prompt_len);
             let cur_lline: &Line = &llines[cursor.y as usize];
             if cur_lline.is_empty() {
                 return Ok(()); // NOP, col does not exist
@@ -287,11 +355,11 @@ impl<W: Write> Editor<W> {
             let (min_x, min_y) = (0, 0);
             if cursor.x == min_x && cursor.y == min_y {
                 // NOP: at origin
-            } else if cursor.x == *PROMPT_LEN && cursor.y == min_y {
+            } else if cursor.x == prompt_len && cursor.y == min_y {
                 // NOP: at leftmost point of content area
             } else if cursor.x == min_x && cursor.y != min_y {
                 let prev_lline = &llines[cursor.y as usize - 1];
-                let last = *PROMPT_LEN + prev_lline.count_graphemes();
+                let last = prompt_len + prev_lline.count_graphemes();
                 queue!(sink, cursor::MoveUp(1))?;
                 queue!(sink, cursor::MoveToColumn(last - 1))?;
                 sink.flush()?;
@@ -303,13 +371,26 @@ impl<W: Write> Editor<W> {
         let editor_dims = self.dimensions()?;
         let cursor = self.cursor_position()?;
         let origin = self.origin()?;
+        let prompt_len = self.prompt_len();
         match &mut self.state {
-            State::Edit(EditState { buffer }) => {
-                move_left(&mut self.sink, buffer, origin, cursor, editor_dims)?;
-            }
-            State::Navigate(NavigateState { nav: _, backup: _, preview }) => {
-                move_left(&mut self.sink, preview, origin, cursor, editor_dims)?;
-            }
+            State::Edit(EditState { buffer }) =>
+                move_left(
+                    &mut self.sink,
+                    buffer,
+                    origin,
+                    cursor,
+                    editor_dims,
+                    prompt_len
+                )?,
+            State::Navigate(NavigateState { nav: _, backup: _, preview }) =>
+                move_left(
+                    &mut self.sink,
+                    preview,
+                    origin,
+                    cursor,
+                    editor_dims,
+                    prompt_len
+                )?,
         }
         Ok(())
     }
@@ -321,11 +402,12 @@ impl<W: Write> Editor<W> {
             origin: Coords,
             cursor: Coords,
             editor_dims: Dims,
+            prompt_len: u16
         ) -> ReplBlockResult<()> {
             if cmd.is_empty() {
                 return Ok(()); // NOP, row does not exist
             }
-            let llines = cmd.logical_lines(editor_dims.width, *PROMPT_LEN);
+            let llines = cmd.logical_lines(editor_dims.width, prompt_len);
             let cur_lline: &Line = &llines[cursor.y as usize];
             if cur_lline.is_empty() {
                 return Ok(()); // NOP, col does not exist
@@ -337,7 +419,7 @@ impl<W: Write> Editor<W> {
             }
             // else if
             //     cursor.y == 0 &&
-            //     cursor.x >= *PROMPT_LEN + cur_lline.count_graphemes()
+            //     cursor.x >= prompt_len + cur_lline.count_graphemes()
             //     // cursor.x == editor_dims.width
             // {
             //     // NOP: cursor is at the end of the text on the top line
@@ -358,7 +440,7 @@ impl<W: Write> Editor<W> {
                 }
             } else if
                 cursor.x < editor_dims.width &&
-                cursor.x < *PROMPT_LEN + cur_lline.count_graphemes()
+                cursor.x < prompt_len + cur_lline.count_graphemes()
             {
                 execute!(sink, cursor::MoveRight(1))?;
             } else {
@@ -369,13 +451,26 @@ impl<W: Write> Editor<W> {
         let origin = self.origin()?;
         let editor_dims = self.dimensions()?;
         let cursor = self.cursor_position()?;
+        let prompt_len = self.prompt_len();
         match &mut self.state {
-            State::Edit(EditState { buffer }) => {
-                move_right(&mut self.sink, buffer, origin, cursor, editor_dims)?;
-            }
-            State::Navigate(NavigateState { nav: _, backup: _, preview }) => {
-                move_right(&mut self.sink, preview, origin, cursor, editor_dims)?;
-            }
+            State::Edit(EditState { buffer }) =>
+                move_right(
+                    &mut self.sink,
+                    buffer,
+                    origin,
+                    cursor,
+                    editor_dims,
+                    prompt_len,
+                )?,
+            State::Navigate(NavigateState { nav: _, backup: _, preview }) =>
+                move_right(
+                    &mut self.sink,
+                    preview,
+                    origin,
+                    cursor,
+                    editor_dims,
+                    prompt_len,
+                )?,
         }
         Ok(())
     }
@@ -452,20 +547,21 @@ impl<W: Write> Editor<W> {
     /// Navigate to the start of the line containing the cursor
     fn cmd_navigate_line_start(&mut self) -> ReplBlockResult<()> {
         let origin = self.origin()?;
+        let prompt_len = self.prompt_len();
         match &mut self.state {
             State::Edit(EditState { .. }) =>
                 execute!(
                     self.sink,
                     cursor::MoveToRow(origin.y),
                     cursor::MoveToColumn(origin.x),
-                    cursor::MoveRight(*PROMPT_LEN),
+                    cursor::MoveRight(prompt_len),
                 )?,
             State::Navigate(NavigateState { .. }) =>
                 execute!(
                     self.sink,
                     cursor::MoveToRow(origin.y),
                     cursor::MoveToColumn(origin.x),
-                    cursor::MoveRight(*PROMPT_LEN),
+                    cursor::MoveRight(prompt_len),
                 )?,
         }
         Ok(())
@@ -478,12 +574,13 @@ impl<W: Write> Editor<W> {
             origin: Coords,
             cmd: &Cmd,
             editor_dims: Dims,
+            prompt_len: u16,
         ) -> ReplBlockResult<()> {
-            let llines = cmd.logical_lines(editor_dims.width, *PROMPT_LEN);
+            let llines = cmd.logical_lines(editor_dims.width, prompt_len);
             if llines.is_empty() {
                 return Ok(());
             }
-            queue!(sink, cursor::MoveTo(origin.x + *PROMPT_LEN, origin.y))?;
+            queue!(sink, cursor::MoveTo(origin.x + prompt_len, origin.y))?;
             if llines.len() >= 2 {
                 let n_down = llines.len().saturating_sub(1);
                 if n_down > 0 {
@@ -500,13 +597,24 @@ impl<W: Write> Editor<W> {
         }
         let origin = self.origin()?;
         let editor_dims = self.dimensions()?;
+        let prompt_len = self.prompt_len();
         match &mut self.state {
-            State::Edit(EditState { buffer }) => {
-                mv_cursor(&mut self.sink, origin, buffer, editor_dims)?;
-            }
-            State::Navigate(NavigateState { nav: _, backup: _, preview }) => {
-                mv_cursor(&mut self.sink, origin, preview, editor_dims)?;
-            }
+            State::Edit(EditState { buffer }) =>
+                mv_cursor(
+                    &mut self.sink,
+                    origin,
+                    buffer,
+                    editor_dims,
+                    prompt_len,
+                )?,
+            State::Navigate(NavigateState { nav: _, backup: _, preview }) =>
+                mv_cursor(
+                    &mut self.sink,
+                    origin,
+                    preview,
+                    editor_dims,
+                    prompt_len,
+                )?,
         }
         Ok(())
     }
@@ -515,16 +623,17 @@ impl<W: Write> Editor<W> {
     fn cmd_insert_char(&mut self, c: char) -> ReplBlockResult<()> {
         let editor_dims = self.dimensions()?;
         let cursor = self.cursor_position()?;
+        let prompt_len = self.prompt_len();
         match &mut self.state {
             State::Edit(EditState { buffer }) => {
                 let old_buffer = buffer.clone();
                 let coords = Coords {
-                    // x: cursor.x - *PROMPT_LEN,
+                    // x: cursor.x - prompt_len,
                     x: cursor.x,
                     y: cursor.y,
                 };
                 terminal::disable_raw_mode().unwrap();
-                buffer.insert_char(coords, c, editor_dims.width, *PROMPT_LEN);
+                buffer.insert_char(coords, c, editor_dims.width, prompt_len);
                 terminal::enable_raw_mode().unwrap();
                 repaint_input_area!(
                     in self,
@@ -594,10 +703,7 @@ impl<W: Write> Editor<W> {
     }
 
     /// Execute the current cmd
-    fn cmd_eval(
-        &mut self,
-        evaluate: &mut impl FnMut(&str) -> ReplBlockResult<()>
-    ) -> ReplBlockResult<()> {
+    fn cmd_eval(&mut self) -> ReplBlockResult<()> {
         match &mut self.state {
             State::Edit(EditState { buffer }) => {
                 execute!(self.sink, style::Print("\n"))?;
@@ -618,7 +724,7 @@ impl<W: Write> Editor<W> {
                 // TODO: use hidx
                 self.history.write_to_file(&self.history_filepath)?;
                 terminal::disable_raw_mode()?;
-                evaluate(source_code.as_str())?;
+                (*self.evaluator)(source_code.as_str())?;
                 self.height = 1; // reset
                 self.write_default_prompt(FlushPolicy::Flush)?;
                 terminal::enable_raw_mode()?;
@@ -627,7 +733,7 @@ impl<W: Write> Editor<W> {
                 self.state = State::Edit(EditState {
                     buffer: std::mem::take(preview),
                 });
-                self.cmd_eval(evaluate)?;
+                self.cmd_eval()?;
             }
         }
         Ok(())
