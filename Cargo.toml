@@ -3,7 +3,7 @@ name = "repl-block"
 version = "0.1.0"
 edition = "2021"
 authors = ["Joey Ezechiels"]
-description = "A crossterm-based library to simplify building Read-Eval-Print-Loops."
+description = "A crossterm-based library for building Read-Eval-Print-Loops (REPLs)."
 
 [dependencies]
 camino = "1.1.6"
