@@ -148,7 +148,6 @@ impl<'eval, W: Write> Editor<'eval, W> {
     }
 }
 
-
 // This is a macro rather than a method of Editor due to the borrowck
 // issues that would ensue when trying to use that method while also
 // matching on Editor state.
@@ -299,8 +298,19 @@ impl<'eval, W: Write> Editor<'eval, W> {
     /// relative to the top-left corner of `self`.
     /// The top left cell is represented as `(0, 0)`.
     fn cursor_position(&self) -> ReplBlockResult<Coords> {
-        cursor_position_relative_to(self.origin()?)
+        self.cursor_position_relative_to(self.origin()?)
     }
+
+    /// Query the global cursor position coordinates, then translate
+    /// them to be relative to the `(x, y)` coordinates.
+    fn cursor_position_relative_to(
+        &self,
+        origin: Coords,
+    ) -> ReplBlockResult<Coords> {
+        let (cx, cy) = cursor::position()?;
+        Ok(Coords { x: cx - origin.x, y: cy - origin.y })
+    }
+
 
     /// Return the (width, height) dimensions of `self`.
     /// The top left cell is represented `(1, 1)`.
@@ -760,13 +770,6 @@ impl Coords {
     }
 }
 
-/// Query the global cursor position coordinates, then translate
-/// them to be relative to the `(x, y)` coordinates.
-fn cursor_position_relative_to(Coords { x, y }: Coords) -> ReplBlockResult<Coords> {
-    let (cx, cy) = cursor::position()?;
-    Ok(Coords { x: cx - x, y: cy - y })
-}
-
 #[derive(Debug)]
 enum State {
     Edit(EditState),
@@ -795,7 +798,7 @@ impl State {
         }
     }
 
-    // fn as_navigate_mut (&mut self) -> ReplResult<&mut NavigateState> {
+    // fn as_navigate_mut(&mut self) -> ReplResult<&mut NavigateState> {
     //     match self {
     //         Self::Edit(_) => panic!("Expected State::Nsvigate(_); Got {self:?}"),
     //         Self::Navigate(ns) => Ok(ns),
