@@ -3,7 +3,7 @@
 use camino::Utf8Path;
 use crate::{
     cmd::{Cmd, Last},
-    error::ReplResult,
+    error::ReplBlockResult,
 };
 use itertools::Itertools;
 use std::collections::VecDeque;
@@ -25,7 +25,7 @@ impl Default for History {
 impl History {
     const UPPER_LIMIT: usize = 1000;
 
-    pub fn read_from_file(filepath: impl AsRef<Utf8Path>) -> ReplResult<Self> {
+    pub fn read_from_file(filepath: impl AsRef<Utf8Path>) -> ReplBlockResult<Self> {
         let filepath = filepath.as_ref();
         let mut file = if filepath.exists() {
             File::open(filepath)?
@@ -49,7 +49,7 @@ impl History {
         }
     }
 
-    pub fn write_to_file(&self, path: impl AsRef<Utf8Path>) -> ReplResult<()> {
+    pub fn write_to_file(&self, path: impl AsRef<Utf8Path>) -> ReplBlockResult<()> {
         let mut file = OpenOptions::new()
             .truncate(true)
             .write(true)

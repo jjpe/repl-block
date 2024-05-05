@@ -2,7 +2,7 @@
 
 use crate::{
     cmd::{Cmd, Line},
-    error::ReplResult,
+    error::ReplBlockResult,
     history::{History, HistIdx},
     macros::key,
 };
@@ -31,7 +31,7 @@ pub struct Editor<W: Write> {
 }
 
 impl Editor<Stdout> {
-    pub fn new(history_filepath: impl AsRef<Utf8Path>) -> ReplResult<Self> {
+    pub fn new(history_filepath: impl AsRef<Utf8Path>) -> ReplBlockResult<Self> {
         let mut editor = Self {
             sink: std::io::stdout(),
             state: State::Edit(EditState { buffer: Cmd::default() }),
@@ -115,7 +115,7 @@ macro_rules! repaint_input_area {
         }
         queue!($editor.sink, cursor::RestorePosition)?;
         $editor.sink.flush()?;
-        ReplResult::Ok(())
+        ReplBlockResult::Ok(())
     }};
 }
 
@@ -123,7 +123,7 @@ impl<W: Write> Editor<W> {
     pub fn write_default_prompt(
         &mut self,
         flush_policy: FlushPolicy,
-    ) -> ReplResult<&mut Self> {
+    ) -> ReplBlockResult<&mut Self> {
         if flush_policy == FlushPolicy::Flush {
             execute!(
                 self.sink,
@@ -147,7 +147,7 @@ impl<W: Write> Editor<W> {
     pub fn write_continue_prompt(
         &mut self,
         flush_policy: FlushPolicy,
-    ) -> ReplResult<()> {
+    ) -> ReplBlockResult<()> {
         if flush_policy == FlushPolicy::Flush {
             execute!(
                 self.sink,
@@ -170,8 +170,8 @@ impl<W: Write> Editor<W> {
 
     pub fn run_event_loop(
         &mut self,
-        evaluate: &mut impl FnMut(&str) -> ReplResult<()>
-    ) -> ReplResult<()> {
+        evaluate: &mut impl FnMut(&str) -> ReplBlockResult<()>
+    ) -> ReplBlockResult<()> {
         loop { match event::read()? {
             Event::Key(key!(CONTROL-'c')) => self.cmd_nop()?,
 
@@ -224,7 +224,7 @@ impl<W: Write> Editor<W> {
     }
 
     /// Return the global (col, row)-coordinates of the top-left corner of `self`.
-    fn origin(&self) -> ReplResult<Coords> {
+    fn origin(&self) -> ReplBlockResult<Coords> {
         let (_term_width, term_height) = terminal::size()?;
         Ok(Coords { x: 0, y: term_height - self.height })
     }
@@ -239,25 +239,25 @@ impl<W: Write> Editor<W> {
     /// Return the (col, row)-coordinates of the cursor,
     /// relative to the top-left corner of `self`.
     /// The top left cell is represented as `(0, 0)`.
-    fn cursor_position(&self) -> ReplResult<Coords> {
+    fn cursor_position(&self) -> ReplBlockResult<Coords> {
         cursor_position_relative_to(self.origin()?)
     }
 
     /// Return the (width, height) dimensions of `self`.
     /// The top left cell is represented `(1, 1)`.
-    fn dimensions(&self) -> ReplResult<Dims> {
+    fn dimensions(&self) -> ReplBlockResult<Dims> {
         let (term_width, _term_height) = terminal::size()?;
         Ok(Dims { width: term_width, height: self.height })
     }
 
 
 
-    fn cmd_nop(&mut self) -> ReplResult<()> {
+    fn cmd_nop(&mut self) -> ReplBlockResult<()> {
         Ok(()) // NOP
     }
 
     /// Exit the REPL
-    fn cmd_exit_repl(&mut self) -> ReplResult<()> {
+    fn cmd_exit_repl(&mut self) -> ReplBlockResult<()> {
         execute!(
             self.sink,
             cursor::SetCursorStyle::DefaultUserShape,
@@ -268,14 +268,14 @@ impl<W: Write> Editor<W> {
         std::process::exit(0);
     }
 
-    fn cmd_navigate_left(&mut self) -> ReplResult<()> {
+    fn cmd_navigate_left(&mut self) -> ReplBlockResult<()> {
         fn move_left<W: Write>(
             sink: &mut W,
             cmd: &Cmd,
             _origin: Coords,
             cursor: Coords,
             editor_dims: Dims,
-        ) -> ReplResult<()> {
+        ) -> ReplBlockResult<()> {
             if cmd.is_empty() {
                 return Ok(()); // NOP, row does not exist
             }
@@ -314,14 +314,14 @@ impl<W: Write> Editor<W> {
         Ok(())
     }
 
-    fn cmd_navigate_right(&mut self) -> ReplResult<()> {
+    fn cmd_navigate_right(&mut self) -> ReplBlockResult<()> {
         fn move_right<W: Write>(
             sink: &mut W,
             cmd: &Cmd,
             origin: Coords,
             cursor: Coords,
             editor_dims: Dims,
-        ) -> ReplResult<()> {
+        ) -> ReplBlockResult<()> {
             if cmd.is_empty() {
                 return Ok(()); // NOP, row does not exist
             }
@@ -380,7 +380,7 @@ impl<W: Write> Editor<W> {
         Ok(())
     }
 
-    fn cmd_navigate_up(&mut self) -> ReplResult<()> {
+    fn cmd_navigate_up(&mut self) -> ReplBlockResult<()> {
         // let editor_width = self.dimensions()?.width;
         // let cursor = self.cursor_position()?;
         match &mut self.state {
@@ -417,7 +417,7 @@ impl<W: Write> Editor<W> {
         Ok(())
     }
 
-    fn cmd_navigate_down(&mut self) -> ReplResult<()> {
+    fn cmd_navigate_down(&mut self) -> ReplBlockResult<()> {
         // let editor_width = self.dimensions()?.width;
         // let cursor = self.cursor_position()?;
         match &mut self.state {
@@ -450,7 +450,7 @@ impl<W: Write> Editor<W> {
     }
 
     /// Navigate to the start of the line containing the cursor
-    fn cmd_navigate_line_start(&mut self) -> ReplResult<()> {
+    fn cmd_navigate_line_start(&mut self) -> ReplBlockResult<()> {
         let origin = self.origin()?;
         match &mut self.state {
             State::Edit(EditState { .. }) =>
@@ -472,13 +472,13 @@ impl<W: Write> Editor<W> {
     }
 
     /// Navigate to the end of the line containing the cursor
-    fn cmd_navigate_line_end(&mut self) -> ReplResult<()> {
+    fn cmd_navigate_line_end(&mut self) -> ReplBlockResult<()> {
         fn mv_cursor(
             sink: &mut impl Write,
             origin: Coords,
             cmd: &Cmd,
             editor_dims: Dims,
-        ) -> ReplResult<()> {
+        ) -> ReplBlockResult<()> {
             let llines = cmd.logical_lines(editor_dims.width, *PROMPT_LEN);
             if llines.is_empty() {
                 return Ok(());
@@ -512,7 +512,7 @@ impl<W: Write> Editor<W> {
     }
 
     /// Add a char to the current line of the current cmd
-    fn cmd_insert_char(&mut self, c: char) -> ReplResult<()> {
+    fn cmd_insert_char(&mut self, c: char) -> ReplBlockResult<()> {
         let editor_dims = self.dimensions()?;
         let cursor = self.cursor_position()?;
         match &mut self.state {
@@ -544,7 +544,7 @@ impl<W: Write> Editor<W> {
     }
 
     /// Add a newline to the current cmd
-    fn cmd_insert_newline(&mut self) -> ReplResult<()> {
+    fn cmd_insert_newline(&mut self) -> ReplBlockResult<()> {
         match &mut self.state {
             State::Edit(EditState { buffer }) => {
                 buffer.push_empty_line();
@@ -562,7 +562,7 @@ impl<W: Write> Editor<W> {
     }
 
     /// Delete the last char on the current line of the current cmd
-    fn cmd_rm_char(&mut self, Coords { x, y }: Coords) -> ReplResult<()> {
+    fn cmd_rm_char(&mut self, Coords { x, y }: Coords) -> ReplBlockResult<()> {
         let cursor = self.cursor_position()?;
         match &mut self.state {
             State::Edit(EditState { buffer }) => {
@@ -596,8 +596,8 @@ impl<W: Write> Editor<W> {
     /// Execute the current cmd
     fn cmd_eval(
         &mut self,
-        evaluate: &mut impl FnMut(&str) -> ReplResult<()>
-    ) -> ReplResult<()> {
+        evaluate: &mut impl FnMut(&str) -> ReplBlockResult<()>
+    ) -> ReplBlockResult<()> {
         match &mut self.state {
             State::Edit(EditState { buffer }) => {
                 execute!(self.sink, style::Print("\n"))?;
@@ -656,7 +656,7 @@ impl Coords {
 
 /// Query the global cursor position coordinates, then translate
 /// them to be relative to the `(x, y)` coordinates.
-fn cursor_position_relative_to(Coords { x, y }: Coords) -> ReplResult<Coords> {
+fn cursor_position_relative_to(Coords { x, y }: Coords) -> ReplBlockResult<Coords> {
     let (cx, cy) = cursor::position()?;
     Ok(Coords { x: cx - x, y: cy - y })
 }
@@ -668,7 +668,7 @@ enum State {
 }
 
 impl State {
-    fn as_edit(&self) -> ReplResult<&EditState> {
+    fn as_edit(&self) -> ReplBlockResult<&EditState> {
         match &self {
             Self::Edit(es) => Ok(es),
             Self::Navigate(_) => panic!("Expected State::Edit(_); Got {self:?}"),
@@ -682,7 +682,7 @@ impl State {
     //     }
     // }
 
-    fn as_navigate(&self) -> ReplResult<&NavigateState> {
+    fn as_navigate(&self) -> ReplBlockResult<&NavigateState> {
         match &self {
             Self::Edit(_) => panic!("Expected State::Nsvigate(_); Got {self:?}"),
             Self::Navigate(ns) => Ok(ns),

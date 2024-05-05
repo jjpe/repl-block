@@ -3,10 +3,10 @@
 use log::SetLoggerError;
 use serde_json::Error as SerdeJsonError;
 
-pub type ReplResult<T> = std::result::Result<T, ReplError>;
+pub type ReplBlockResult<T> = std::result::Result<T, ReplBlockError>;
 
 #[derive(Debug, displaydoc::Display, derive_more::From)]
-pub enum ReplError {
+pub enum ReplBlockError {
     /// I/O error: {0}
     IoError(std::io::Error),
     /// Camino path conversion error: {0}

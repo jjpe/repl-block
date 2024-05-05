@@ -3,7 +3,7 @@
 use std::io::Write;
 
 use crate::{
-    error::ReplResult,
+    error::ReplBlockResult,
     editor::Coords,
 };
 use crossterm::terminal;
@@ -291,7 +291,7 @@ impl Line {
         }
     }
 
-    pub fn does_overflow(&self) -> ReplResult<bool> {
+    pub fn does_overflow(&self) -> ReplBlockResult<bool> {
         // !matches!(self.num_logical_lines(), Ok(1))
         let num_graphemes = self.count_graphemes();
         let (num_cols, _) = terminal::size()?;
