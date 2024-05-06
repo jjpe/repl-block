@@ -55,8 +55,6 @@ impl Cmd {
         println!("c='{c}'");
         println!("cmd={self:#?}--------------");
         println!("\n\n\n\n");
-
-        self.rebalance(editor_width, prompt_len);
     }
 
     pub fn push_char(
@@ -71,37 +69,6 @@ impl Cmd {
             self.push_empty_line();
         }
         self[Last].push_char(c);
-        self.rebalance(editor_width, prompt_len);
-    }
-
-    fn rebalance(
-        &mut self,
-        // The width (in columns) of the Editor
-        editor_width: u16,
-        // The length of the prompt on logical line 0
-        prompt_len: u16,
-    ) {
-        for lidx in 0..self.lines.len() {
-            let line = &mut self[lidx];
-            if line.count_graphemes() > editor_width {
-                let spillover = line.graphemes()
-                    .skip(editor_width as usize)
-                    .collect::<String>();
-                // Truncate the `line` to the first `editor_width` graphemes:
-                *line = line.graphemes()
-                    .take(editor_width as usize)
-                    .collect::<Line>();
-                if spillover.is_empty() {
-                    continue
-                }
-                if self.lines.get(lidx + 1).is_none() {
-                    self.push_empty_line();
-                }
-                if let Some(next) = self.lines.get_mut(lidx + 1) {
-                    next.insert_str(0, &spillover);
-                }
-            }
-        }
     }
 
     pub fn push_empty_line(&mut self) {
@@ -150,9 +117,35 @@ impl Cmd {
         // The length of the prompt on logical line 0
         prompt_len: u16,
     ) -> Vec<Line> {
-        self.lines.iter()
-            .flat_map(|line| line.logical_lines(editor_width, prompt_len))
-            .collect()
+        let mut llines = vec![];
+        for (rowidx, line) in self.lines().iter().enumerate() {
+            let mut graphemes = line.graphemes().peekable();
+
+            let mut lline0 = Line::new();
+            let start = if rowidx == 0 { prompt_len } else { 0 };
+            for _ in start..editor_width {
+                let Some(g) = graphemes.next() else { break };
+                lline0.push_str(g);
+            }
+            if !lline0.is_empty() {
+                llines.push(lline0);
+            }
+
+            'other_lines: loop {
+                let mut lline = Line::new();
+                for _ in 0 .. editor_width {
+                    let Some(g) = graphemes.next() else { break };
+                    lline.push_str(g);
+                }
+                if !lline.is_empty() {
+                    llines.push(lline);
+                }
+                if graphemes.peek().is_none() {
+                    break 'other_lines;
+                }
+            }
+        }
+        llines
     }
 
     pub fn count_logical_lines(
@@ -162,11 +155,33 @@ impl Cmd {
         // The length of the prompt on logical line 0
         prompt_len: u16,
     ) -> u16 {
-        let mut num = 0;
-        for line in self.lines().iter() {
-            num += line.count_logical_lines(editor_width, prompt_len);
+        let mut llines = 0;
+        for (rowidx, line) in self.lines().iter().enumerate() {
+            let mut graphemes = line.graphemes().peekable();
+
+            let mut lline0_len = 0;
+            let start = if rowidx == 0 { prompt_len } else { 0 };
+            for _ in start..editor_width {
+                let Some(_g) = graphemes.next() else { break };
+                lline0_len += 1;
+            }
+            let is_lline0_empty = lline0_len == 0;
+            llines += if is_lline0_empty { 0 } else { 1 };
+
+            'other_lines: loop {
+                let mut lline_len = 0;
+                for _ in 0..editor_width {
+                    let Some(_g) = graphemes.next() else { break };
+                    lline_len += 1;
+                }
+                let is_lline_empty = lline_len == 0;
+                llines += if is_lline_empty { 0 } else { 1 };
+                if graphemes.peek().is_none() {
+                    break 'other_lines;
+                }
+            }
         }
-        num
+        llines
     }
 
     pub fn rm_line(&mut self, lineno: usize) {
@@ -179,6 +194,31 @@ impl Cmd {
             Some(num_lines - 1)
         } else {
             None
+        }
+    }
+
+    pub fn end_of_cmd_cursor(
+        &self,
+        // The width (in columns) of the Editor
+        editor_width: u16,
+        // The length of the prompt on logical line 0
+        prompt_len: u16,
+    ) -> Coords {
+        let llines = self.logical_lines(editor_width, prompt_len);
+        if let Some(last) = llines.last() {
+            Coords {
+                x: if llines.len() == 1 {
+                    prompt_len + last.count_graphemes()
+                } else {
+                    last.count_graphemes()
+                },
+                y: llines.len() as u16 - 1,
+            }
+        } else {
+            Coords {
+                x: prompt_len,
+                y: Coords::ORIGIN.y,
+            }
         }
     }
 
@@ -289,70 +329,6 @@ impl Line {
         for s in s.graphemes(true) {
             self.0.insert_str(byte_idx, s);
         }
-    }
-
-    pub fn does_overflow(&self) -> ReplBlockResult<bool> {
-        // !matches!(self.num_logical_lines(), Ok(1))
-        let num_graphemes = self.count_graphemes();
-        let (num_cols, _) = terminal::size()?;
-        Ok(num_graphemes > num_cols)
-    }
-
-    pub fn logical_lines(
-        &self,
-        // The width (in columns) of the Editor
-        editor_width: u16,
-        // The length of the prompt on logical line 0
-        prompt_len: u16,
-    ) -> Vec<Line> {
-        let mut graphemes = self.graphemes();
-        let mut first = Line::new();
-        for _ in 0 .. editor_width - prompt_len {
-            match graphemes.next() {
-                Some(g) => first.push_str(g),
-                None => return vec![first], // End of the first & only line
-            }
-        }
-        let lines: Vec<Line> = std::iter::once(first)
-            .chain(
-                graphemes
-                    .chunks(editor_width as usize).into_iter()
-                    .map(|chunk| chunk.collect::<Line>())
-            )
-            .collect();
-        assert!(lines.len() >= 1);
-        lines
-    }
-
-    pub fn count_logical_lines(
-        &self,
-        // The width (in columns) of the Editor
-        editor_width: u16,
-        // The length of the prompt on logical line 0
-        prompt_len: u16,
-    ) -> u16 {
-
-        let mut num_lines = 1;
-        let mut num_graphemes = self.count_graphemes();
-        let line_len = std::cmp::min(
-            editor_width - prompt_len, // line overflow
-            num_graphemes, // no line overflow
-        );
-        num_graphemes -= line_len; // first line
-        while num_graphemes > 0 {
-            let line_len = std::cmp::min(
-                editor_width,  // line overflow
-                num_graphemes, // no line overflow
-            );
-            num_graphemes -= line_len; // rest of the lines
-            num_lines += 1;
-        }
-        assert!(num_lines >= 1);
-        num_lines
-
-        // let line_len = prompt_len + num_graphemes;
-        // 1 /*remaining non-full row*/ + (line_len / editor_width)
-
     }
 
     pub fn graphemes(&self) -> impl Iterator<Item = &str> + '_ {
