@@ -20,32 +20,32 @@ use std::io::{Stdout, Write};
 type Evaluator<'eval> =
     dyn for<'src> FnMut(&'src str) -> ReplBlockResult<()> + 'eval;
 
-pub struct EditorBuilder<'eval, W: Write> {
+pub struct EditorBuilder<'eval, const N: usize, W: Write> {
     sink: W,
-    default_prompt: Vec<StyledContent<char>>,
-    continue_prompt: Vec<StyledContent<char>>,
+    default_prompt: [StyledContent<char>; N],
+    continue_prompt: [StyledContent<char>; N],
     history_filepath: Utf8PathBuf,
     evaluator: Box<Evaluator<'eval>>,
 }
 
-impl<'eval> Default for EditorBuilder<'eval, Stdout> {
-    fn default() -> EditorBuilder<'eval, Stdout> {
+impl<'eval> Default for EditorBuilder<'eval, 3, Stdout> {
+    fn default() -> EditorBuilder<'eval, 3, Stdout> {
         #[inline(always)]
         fn nop<'eval>() -> Box<Evaluator<'eval>> {
             Box::new(|_| Ok(()))
         }
         EditorBuilder {
             sink: std::io::stdout(),
-            default_prompt:  vec!['■'.yellow(), '>'.green().bold(), ' '.reset()],
-            continue_prompt: vec!['ꞏ'.yellow(), 'ꞏ'.yellow(),       ' '.reset()],
+            default_prompt:  ['■'.yellow(), '>'.green().bold(), ' '.reset()],
+            continue_prompt: ['ꞏ'.yellow(), 'ꞏ'.yellow(),       ' '.reset()],
             history_filepath: Utf8PathBuf::new(),
             evaluator: nop(),
         }
     }
 }
 
-impl<'eval, W: Write> EditorBuilder<'eval, W> {
-    pub fn sink<S: Write>(self, sink: S) -> EditorBuilder<'eval, S> {
+impl<'eval, const N: usize, W: Write> EditorBuilder<'eval, N, W> {
+    pub fn sink<S: Write>(self, sink: S) -> EditorBuilder<'eval, N, S> {
         EditorBuilder {
             sink,
             default_prompt: self.default_prompt,
@@ -55,12 +55,12 @@ impl<'eval, W: Write> EditorBuilder<'eval, W> {
         }
     }
 
-    pub fn default_prompt(mut self, prompt: Vec<StyledContent<char>>) -> Self {
+    pub fn default_prompt(mut self, prompt: [StyledContent<char>; N]) -> Self {
         self.default_prompt = prompt;
         self
     }
 
-    pub fn continue_prompt(mut self, prompt: Vec<StyledContent<char>>) -> Self {
+    pub fn continue_prompt(mut self, prompt: [StyledContent<char>; N]) -> Self {
         self.continue_prompt = prompt;
         self
     }
@@ -78,7 +78,7 @@ impl<'eval, W: Write> EditorBuilder<'eval, W> {
         self
     }
 
-    pub fn build(self) -> ReplBlockResult<Editor<'eval, W>> {
+    pub fn build(self) -> ReplBlockResult<Editor<'eval, N, W>> {
         assert_eq!(
             self.default_prompt.len(), self.continue_prompt.len(),
             "PRECONDITION FAILED: default_prompt.len() != continue_prompt.len()"
@@ -101,7 +101,7 @@ impl<'eval, W: Write> EditorBuilder<'eval, W> {
 
 
 // #[derive(Debug)] TODO write manual impl
-pub struct Editor<'eval, W: Write> {
+pub struct Editor<'eval, const N: usize, W: Write> {
     sink: W,
     state: State,
     /// The height of the input area, in lines
@@ -113,19 +113,19 @@ pub struct Editor<'eval, W: Write> {
     /// The fn used to perform the Evaluate step of the REPL
     evaluator: Box<Evaluator<'eval>>,
     /// The default command prompt
-    default_prompt: Vec<StyledContent<char>>,
+    default_prompt: [StyledContent<char>; N],
     /// The command prompt used for command continuations
-    continue_prompt: Vec<StyledContent<char>>,
+    continue_prompt: [StyledContent<char>; N],
 }
 
-impl<'eval, W: Write> Editor<'eval, W> {
+impl<'eval, const N: usize, W: Write> Editor<'eval, N, W> {
     fn new(
         mut sink: W,
         history_filepath: impl AsRef<Utf8Path>,
         evaluator: Box<Evaluator<'eval>>,
-        default_prompt: Vec<StyledContent<char>>,
-        continue_prompt: Vec<StyledContent<char>>,
-    ) -> ReplBlockResult<Editor<'eval, W>> {
+        default_prompt: [StyledContent<char>; N],
+        continue_prompt: [StyledContent<char>; N],
+    ) -> ReplBlockResult<Editor<'eval, N, W>> {
         sink.flush()?;
         let mut editor = Self {
             sink,
@@ -151,7 +151,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
     }
 }
 
-impl<'eval, W: Write> Editor<'eval, W> {
+impl<'eval, const N: usize, W: Write> Editor<'eval, N, W> {
     pub fn run_event_loop(&mut self) -> ReplBlockResult<()> {
         loop {
             let old_height = self.height;
