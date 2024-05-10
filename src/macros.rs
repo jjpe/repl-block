@@ -1,7 +1,7 @@
 //!
 
 macro_rules! key {
-    (@special $($modifier:ident)|+ - $name:ident) => {
+    (@name $($modifier:ident)|+ - $name:ident) => {
         // The key `$modifier` is expected to be one of
         // {SHIFT, CONTROL, ALT, SUPER, HYPER, META, NONE}
         KeyEvent {
@@ -11,7 +11,7 @@ macro_rules! key {
             state: _,
         }
     };
-    (@special $name:ident) => {
+    (@name $name:ident) => {
         KeyEvent {
             modifiers: KeyModifiers::NONE,
             code: KeyCode::$name,
