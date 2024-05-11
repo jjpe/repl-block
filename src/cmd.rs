@@ -115,7 +115,7 @@ impl Cmd {
         for line in self.lines().iter() {
             if line.is_start() {
                 clines.push(line.clone());
-            } else if line.is_continue() {
+            } else if line.is_overflow() {
                 let prev = clines.last_mut().unwrap();
                 prev.push_str(line.as_str());
             } else {
@@ -125,7 +125,7 @@ impl Cmd {
             // if lidx == 0 { // nothing to continue
             //     let last = clines.last_mut().unwrap();
             //     last.push_str(line.as_str());
-            // } else if line.kind == LineKind::Continue {
+            // } else if line.kind == LineKind::Overflow {
             //     let last = clines.last_mut().unwrap();
             //     last.push_str(line.as_str());
             // } else {
@@ -278,16 +278,16 @@ impl Line {
         Self::new(LineKind::Start)
     }
 
-    pub(crate) fn new_continue() -> Self {
-        Self::new(LineKind::Continue)
+    pub(crate) fn new_overflow() -> Self {
+        Self::new(LineKind::Overflow)
     }
 
     pub fn is_start(&self) -> bool {
         self.kind == LineKind::Start
     }
 
-    pub fn is_continue(&self) -> bool {
-        self.kind == LineKind::Continue
+    pub fn is_overflow(&self) -> bool {
+        self.kind == LineKind::Overflow
     }
 
     pub fn is_empty(&self) -> bool {
@@ -398,7 +398,7 @@ impl Line {
         }
 
         'continue_lines: loop {
-            let mut lline = Line::new_continue();
+            let mut lline = Line::new_overflow();
             for _ in 0 .. editor_width {
                 let Some(g) = graphemes.next() else { break };
                 lline.push_str(g);
@@ -428,7 +428,7 @@ impl std::fmt::Display for Line {
 pub enum LineKind {
     #[default]
     Start,
-    Continue
+    Overflow
 }
 
 
@@ -464,7 +464,7 @@ mod test {
                 },
                 Line {
                     content: r#"mp;&gt;&#x20;{{more text}}</xml>/descendant-or-self::processing-instruction()"#.to_string(),
-                    kind: LineKind::Continue,
+                    kind: LineKind::Overflow,
                 }
             ]
         };
@@ -497,7 +497,7 @@ mod test {
                 },
                 Line {
                     content: r#"mp;&gt;&#x20;{{more text}}</xml>/descendant-or-self::processing-instruction()"#.to_string(),
-                    kind: LineKind::Continue,
+                    kind: LineKind::Overflow,
                 }
             ]
         };
