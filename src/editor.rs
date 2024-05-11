@@ -182,17 +182,6 @@ impl<'eval, W: Write> Editor<'eval, W> {
             Event::Key(key!(CONTROL-'e')) => self.cmd_nav_to_end_of_cmd()?,
             Event::Key(key!(@name End))   => self.cmd_nav_to_end_of_cmd()?,
 
-            // TODO remove both key bindings
-            // Mainly useful for debugging:
-            Event::Key(key!(@name ALT-Up)) => {
-                // execute!(self.sink, cursor::MoveUp(1))?;
-                execute!(self.sink, terminal::ScrollUp(1))?;
-            },
-            Event::Key(key!(@name ALT-Down)) => {
-                execute!(self.sink, terminal::ScrollDown(1))?;
-                // execute!(self.sink, cursor::MoveDown(1))?;
-            },
-
             // Editing;
             Event::Key(key!(@c))                => self.cmd_insert_char(c)?,
             Event::Key(key!(SHIFT-@c))          => self.cmd_insert_char(c)?,
@@ -200,10 +189,8 @@ impl<'eval, W: Write> Editor<'eval, W> {
             //       yet `CONTROL-o` works as expected:
             Event::Key(key!(@name SHIFT-Enter)) => self.cmd_insert_newline()?,
             Event::Key(key!(CONTROL-'o'))       => self.cmd_insert_newline()?,
-            Event::Key(key!(@name Backspace)) =>
-                self.cmd_rm_grapheme_before_cursor()?,
-            Event::Key(key!(@name Delete)) =>
-                self.cmd_rm_grapheme_at_cursor()?,
+            Event::Key(key!(@name Backspace))   => self.cmd_rm_grapheme_before_cursor()?,
+            Event::Key(key!(@name Delete))      => self.cmd_rm_grapheme_at_cursor()?,
 
             _event => {/* ignore the event */},
         }
@@ -213,33 +200,51 @@ impl<'eval, W: Write> Editor<'eval, W> {
     fn render_ui(&mut self, old_editor_height: u16) ->ReplBlockResult<()> {
         let editor_dims = self.dimensions()?;
         let prompt_len = self.prompt_len();
-        let calculate_uncursor = |cmd: &Cmd, cursor: Coords| {
-            if cursor == Coords::EDITOR_ORIGIN {
-                return Coords { x: prompt_len, y: Coords::EDITOR_ORIGIN.y };
-            }
 
+        let calculate_uncursor = |cmd: &Cmd, cursor: Coords| {
             let prev_unlines: Vec<Vec<Line>> = (0..cursor.y)
                 .map(|y| cmd[y].uncompress(editor_dims.width, prompt_len))
                 .collect();
-            let mut y = prev_unlines.iter()
-                .map(|unline| unline.len())
-                .sum::<usize>() as u16;
-
-            let mut x = cursor.x;
+            let mut uncursor = Coords {
+                x: cursor.x,
+                y: prev_unlines.iter()
+                    .map(|unline| unline.len())
+                    .sum::<usize>() as u16,
+            };
             let line = &cmd[cursor.y];
-            for unline in line.uncompress(editor_dims.width, prompt_len) {
-                // let unline_len = unline.count_graphemes();
+            let unlines = line.uncompress(editor_dims.width, prompt_len);
+            for unline in unlines.iter() {
                 if unline.is_start() {
-                    x += prompt_len;
-                }
-                if x >= editor_dims.width {
-                    // x -= unline_len;
-                    x -= editor_dims.width;
-                    y += 1;
+                    let unline_len = unline.count_graphemes();
+                    let width = std::cmp::min(editor_dims.width, unline_len);
+                    if uncursor.x > width {
+                        uncursor.x -= width;
+                        uncursor.y += 1;
+                    } else {
+                        break;
+                    }
+                } else if unline.is_continue() {
+                    let unline_len = unline.count_graphemes();
+                    let width = std::cmp::min(editor_dims.width, unline_len);
+                    if uncursor.x > width {
+                        uncursor.x -= width;
+                        uncursor.y += 1;
+                    } else {
+                        break;
+                    }
+                } else {
+                    unreachable!("This is a logic bug. Please file a bug report")
                 }
             }
-            Coords { x, y }
+
+            let all_unlines = cmd.uncompress(editor_dims.width, prompt_len);
+            if all_unlines[uncursor.y as usize].is_start() {
+                uncursor.x += prompt_len;
+            }
+
+            uncursor
         };
+
         match &self.state {
             State::Edit(EditState { buffer, cursor }) => {
                 let cursor = *cursor; // Be like water: avoid borrowck complaint
@@ -251,7 +256,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 let uncursor = calculate_uncursor(buffer, cursor);
 
                 // Scroll up the old output *BEFORE* clearing the input area
-                for _ in old_editor_height as usize .. uncompressed.count_lines() {
+                for _ in old_editor_height..uncompressed.count_lines() {
                     queue!(self.sink, terminal::ScrollUp(1))?;
                 }
 
@@ -305,78 +310,14 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 }
 
                 // Rendser the uncursor
-                let o = self.origin()?;
+                let origin = self.origin()?;
                 queue!(
                     self.sink,
-                    // cursor::MoveTo(o.x + uncursor.x, o.y + uncursor.y),
-                    cursor::MoveToColumn(o.x + uncursor.x),
-                    cursor::MoveToRow(o.y + uncursor.y),
+                    cursor::MoveToColumn(origin.x + uncursor.x),
+                    cursor::MoveToRow(origin.y + uncursor.y),
                 )?;
-
-
-                // { // Clear and prepare the input area
-                //     self.move_cursor_to_origin(FlushPolicy::NoFlush)?;
-                //     self.clear_input_area(FlushPolicy::NoFlush)?;
-                //     self.write_default_prompt(FlushPolicy::NoFlush)?;
-                // }
-                // for (lidx, lline) in uncompressed.lines().iter().enumerate() {
-                //     if lidx == 0 {
-                //         queue!(
-                //             self.sink,
-                //             style::Print(lline),
-                //             // cursor::MoveTo(end_of_cmd.x, end_of_cmd.y),
-                //             cursor::MoveDown(1),
-                //             // cursor::MoveToColumn(0),
-                //         )?;
-                //     } else {
-                //         if lline.kind == LineKind::Continue {
-                //             queue!(
-                //                 self.sink,
-                //                 cursor::MoveToColumn(0),
-                //                 style::Print(lline),
-                //                 // style::Print(format!("FOOOOOO: '{}'", lline)),
-                //                 // cursor::MoveUp(1),
-                //                 // cursor::MoveTo(end_of_cmd.x, end_of_cmd.y),
-                //                 cursor::MoveDown(1),
-                //                 cursor::MoveToColumn(0),
-                //             )?;
-                //         } else {
-                //             self.write_continue_prompt(FlushPolicy::NoFlush)?;
-                //             queue!(
-                //                 self.sink,
-                //                 style::Print(lline),
-                //                 // style::Print(format!("FOOOOOO: '{}'", lline)),
-                //                 // cursor::MoveUp(1),
-                //                 // cursor::MoveTo(end_of_cmd.x, end_of_cmd.y),
-                //                 cursor::MoveDown(1),
-                //                 cursor::MoveToColumn(0),
-                //                 // cursor::MoveToColumn(0),
-                //             )?;
-                //         }
-                //     }
-                // }
-
-
-
-                // { // Clear and prepare the input area
-                //     self.move_cursor_to_origin(FlushPolicy::NoFlush)?;
-                //     self.clear_input_area(FlushPolicy::NoFlush)?;
-                //     self.write_default_prompt(FlushPolicy::NoFlush)?;
-                // }
-                // for (lidx, lline) in llines.iter().enumerate() {
-                //     queue!(
-                //         self.sink,
-                //         style::Print(lline),
-                //         cursor::MoveDown(1),
-                //         cursor::MoveToColumn(0),
-                //     )?;
-                // }
-
-
-                // self.move_cursor_to(FlushPolicy::NoFlush, cursor)?;
-
             }
-            State::Navigate(NavigateState { hidx, backup, preview, cursor }) => {
+            State::Navigate(NavigateState { preview, cursor, .. }) => {
                 let cursor = *cursor; // Be like water: avoid borrowck complaint
                 let uncompressed = preview.uncompress(editor_dims.width, prompt_len);
                 let num_uncompressed_lines = uncompressed.count_lines() as u16;
@@ -386,7 +327,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 let uncursor = calculate_uncursor(preview, cursor);
 
                 // Scroll up the old output *BEFORE* clearing the input area
-                for _ in old_editor_height as usize .. uncompressed.count_lines() {
+                for _ in old_editor_height..uncompressed.count_lines() {
                     queue!(self.sink, terminal::ScrollUp(1))?;
                 }
 
@@ -482,8 +423,8 @@ impl<'eval, W: Write> Editor<'eval, W> {
         flush_policy: FlushPolicy,
     ) -> ReplBlockResult<&mut Self> {
         queue!(self.sink, cursor::MoveToColumn(0))?;
-        for i in 0..self.default_prompt.len() {
-            queue!(self.sink, style::Print(self.default_prompt[i]))?;
+        for &c in &self.default_prompt {
+            queue!(self.sink, style::Print(c))?;
         }
         if let FlushPolicy::Flush = flush_policy {
             self.sink.flush()?;
@@ -496,24 +437,9 @@ impl<'eval, W: Write> Editor<'eval, W> {
         flush_policy: FlushPolicy,
     ) -> ReplBlockResult<()> {
         queue!(self.sink, cursor::MoveToColumn(0))?;
-        for c in &self.continue_prompt {
+        for &c in &self.continue_prompt {
             queue!(self.sink, style::Print(c))?;
         }
-        if let FlushPolicy::Flush = flush_policy {
-            self.sink.flush()?;
-        }
-        Ok(())
-    }
-
-    fn move_cursor_to(
-        &mut self,
-        flush_policy: FlushPolicy,
-        target: Coords,
-    ) -> ReplBlockResult<()> {
-        let origin = self.origin()?;
-        // queue!(self.sink, cursor::MoveTo(origin.x + target.x, origin.y + target.y))?;
-        queue!(self.sink, cursor::MoveToColumn(origin.x + target.x))?;
-        queue!(self.sink, cursor::MoveToRow(origin.y + target.y))?;
         if let FlushPolicy::Flush = flush_policy {
             self.sink.flush()?;
         }
@@ -649,8 +575,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 } else {
                     *hidx += 1;
                     *preview = self.history[*hidx].clone(); // update
-                    //*cursor = preview.end_of_cmd();
-                    *cursor = Coords::EDITOR_ORIGIN;
+                    *cursor = preview.end_of_cmd();
                 }
             }
         }
@@ -658,28 +583,47 @@ impl<'eval, W: Write> Editor<'eval, W> {
     }
 
     fn cmd_nav_cmd_left(&mut self) -> ReplBlockResult<()> {
-        let editor_dims = self.dimensions()?;
-        let prompt_len = self.prompt_len();
+        // let editor_dims = self.dimensions()?;
         let update_cursor = |cmd: &Cmd, cursor: &mut Coords| {
-            let CursorFlags {
-                is_top_cmd_line,
-                is_start_of_cmd_line,
-                ..
-            } = cursor.flags(editor_dims, prompt_len, cmd);
-            if is_top_cmd_line && is_start_of_cmd_line {
+            // let CursorFlags {
+            //     is_top_cmd_line: _,
+            //     is_start_of_cmd,
+            //     ..
+            // } = cursor.flags(editor_dims, cmd);
+
+            //if is_start_of_cmd {
+            if *cursor == Coords::EDITOR_ORIGIN {
                 // NOP
-            } else if is_top_cmd_line && !is_start_of_cmd_line {
-                cursor.x -= 1;
-            } else if !is_top_cmd_line && is_start_of_cmd_line {
-                *cursor = Coords {
-                    x: cmd[cursor.y - 1].max_x(),
-                    y: cursor.y - 1,
-                };
-            } else if !is_top_cmd_line && !is_start_of_cmd_line {
-                cursor.x -= 1;
             } else {
-                panic!("[cmd_nav_cmd_left] Illegal cursor position: {cursor}");
+                let is_start_of_cursor_line = cursor.x == Coords::EDITOR_ORIGIN.x;
+                let has_prev_line = cursor.y >= 1;
+                if is_start_of_cursor_line && has_prev_line {
+                    *cursor = Coords {
+                        x: cmd[cursor.y - 1].count_graphemes(),
+                        y: cursor.y - 1,
+                    };
+                } else if is_start_of_cursor_line && !has_prev_line {
+                    // NOP
+                } else { // not at the start of a line
+                    cursor.x -= 1;
+                }
             }
+
+            // if is_top_cmd_line && is_start_of_cmd {
+            //     // NOP
+            // } else if is_top_cmd_line && !is_start_of_cmd {
+            //     cursor.x -= 1;
+            // } else if !is_top_cmd_line && is_start_of_cmd {
+            //     *cursor = Coords {
+            //         x: cmd[cursor.y - 1].max_x(),
+            //         y: cursor.y - 1,
+            //     };
+            // } else if !is_top_cmd_line && !is_start_of_cmd {
+            //     cursor.x -= 1;
+            // } else {
+            //     panic!("[cmd_nav_cmd_left] Illegal cursor position: {cursor}");
+            // }
+
         };
         match &mut self.state {
             State::Edit(EditState { buffer, cursor }) => {
@@ -693,28 +637,35 @@ impl<'eval, W: Write> Editor<'eval, W> {
     }
 
     fn cmd_nav_cmd_right(&mut self) -> ReplBlockResult<()> {
-        let editor_dims = self.dimensions()?;
-        let prompt_len = self.prompt_len();
+        //let editor_dims = self.dimensions()?;
         let update_cursor = |cmd: &Cmd, cursor: &mut Coords| {
-            let CursorFlags {
-                is_bottom_cmd_line,
-                is_end_of_cmd_line,
-                ..
-            } = cursor.flags(editor_dims, prompt_len, cmd);
-            if is_bottom_cmd_line && is_end_of_cmd_line {
+            // let CursorFlags {
+            //     is_bottom_cmd_line,
+            //     is_top_cmd_line,
+            //     is_start_of_cmd,
+            //     is_end_of_cmd,
+            //     ..
+            // } = cursor.flags(editor_dims, cmd);
+
+            //if is_end_of_cmd {
+            if *cursor == cmd.end_of_cmd() {
                 // NOP
-            } else if is_bottom_cmd_line && !is_end_of_cmd_line {
-                cursor.x += 1;
-            } else if !is_bottom_cmd_line && is_end_of_cmd_line {
-                *cursor = Coords {
-                    x: Coords::EDITOR_ORIGIN.x,
-                    y: cursor.y + 1,
-                };
-            } else if !is_bottom_cmd_line && !is_end_of_cmd_line {
-                cursor.x += 1;
             } else {
-                panic!("[cmd_nav_cmd_right] Illegal cursor position: {cursor}");
+                let is_end_of_cursor_line =
+                    cursor.x == cmd[cursor.y].count_graphemes();
+                let has_next_line = cursor.y + 1 < cmd.count_lines();
+                if is_end_of_cursor_line && has_next_line {
+                    *cursor = Coords {
+                        x: Coords::EDITOR_ORIGIN.x,
+                        y: cursor.y + 1,
+                    };
+                } else if is_end_of_cursor_line && !has_next_line {
+                    // NOP
+                } else { // not the end of the line
+                    cursor.x += 1;
+                }
             }
+
         };
         match &mut self.state {
             State::Edit(EditState { buffer, cursor }) => {
@@ -775,7 +726,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
     fn cmd_insert_newline(&mut self) -> ReplBlockResult<()> {
         match &mut self.state {
             State::Edit(EditState { buffer, cursor }) => {
-                buffer.push_empty_line(LineKind::Start);
+                buffer.insert_empty_line(*cursor);
                 *cursor = Coords {
                     x: Coords::EDITOR_ORIGIN.x,
                     y: cursor.y + 1
@@ -795,19 +746,24 @@ impl<'eval, W: Write> Editor<'eval, W> {
     /// Delete the grapheme before the cursor in of the current cmd
     /// Do nothing if there if there is no grapheme before the cursor.
     fn cmd_rm_grapheme_before_cursor(&mut self) -> ReplBlockResult<()> {
-        let editor_dims = self.dimensions()?;
-        let prompt_len = self.prompt_len();
         match &mut self.state {
             State::Edit(EditState { buffer, cursor }) => {
-                if buffer.is_empty() {
-                    return Ok(()); // NOP
+                if cursor.y == 0 && cursor.x == 0 {
+                    // NOP
+                } else if cursor.y == 0 && cursor.x > 0 {
+                    buffer.rm_grapheme_before(*cursor);
+                    cursor.x -= 1;
+                } else if cursor.y > 0 && cursor.x == 0 {
+                    let old_len = buffer[cursor.y - 1].count_graphemes();
+                    buffer.rm_grapheme_before(*cursor);
+                    *cursor = Coords { x: old_len, y: cursor.y - 1 };
+                } else if cursor.y > 0 && cursor.x > 0 {
+                    buffer.rm_grapheme_before(*cursor);
+                    cursor.x -= 1;
+                } else {
+                    let tag = "cmd_rm_grapheme_before_cursor";
+                    unreachable!("[{tag}] cursor={cursor:?}");
                 }
-                buffer.rm_grapheme_before(
-                    *cursor,
-                    editor_dims,
-                    prompt_len,
-                );
-                self.cmd_nav_cmd_left()?;
             }
             State::Navigate(NavigateState { preview, cursor, .. }) => {
                 self.state = State::Edit(EditState {
@@ -825,10 +781,18 @@ impl<'eval, W: Write> Editor<'eval, W> {
     fn cmd_rm_grapheme_at_cursor(&mut self) -> ReplBlockResult<()> {
         match &mut self.state {
             State::Edit(EditState { buffer, cursor }) => {
-                if buffer.is_empty() {
-                    return Ok(()); // NOP
+                let is_end_of_line = cursor.x == buffer[cursor.y].count_graphemes();
+                let has_next_line = cursor.y + 1 < buffer.count_lines();
+                if is_end_of_line && has_next_line {
+                    buffer.rm_grapheme_at(*cursor);
+                } else if is_end_of_line && !has_next_line {
+                    // NOP
+                } else if !is_end_of_line {
+                    buffer.rm_grapheme_at(*cursor);
+                } else {
+                    let tag = "cmd_rm_grapheme_at_cursor";
+                    unreachable!("[{tag}] cursor={cursor:?}");
                 }
-                buffer.rm_grapheme_at(*cursor);
             }
             State::Navigate(NavigateState { preview, cursor, .. }) => {
                 self.state = State::Edit(EditState {
@@ -858,8 +822,8 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 let cmd = std::mem::take(buffer);
                 let _hidx = self.history.add_cmd(cmd);
                 self.history.write_to_file(&self.history_filepath)?;
-                {   // Evaluation can and usually does produce some output,
-                    // and that will be garbled if written in raw mode
+                {   // Evaluation usually produces some output, and
+                    // that will be garbled if written in raw mode
                     terminal::disable_raw_mode()?;
                     (*self.evaluator)(source_code.as_str())?;
                     terminal::enable_raw_mode()?;
@@ -892,57 +856,6 @@ impl Coords {
     pub fn is_origin(&self) -> bool {
         *self == Self::EDITOR_ORIGIN
     }
-
-    pub fn flags(
-        &self,
-        editor_dims: Dims,
-        prompt_len: u16,
-        cmd: &Cmd,
-    ) -> CursorFlags {
-        let is_top_cmd_line = self.y == 0;
-        let is_bottom_cmd_line = self.y == cmd.count_lines() as u16 - 1;
-        // let offset = if is_top_cmd_line || cmd[self.y].is_start() {
-        //     prompt_len
-        // } else {
-        //     0
-        // };
-        let offset = 0;
-        let is_start_of_cmd_line = self.x == offset;
-        // let is_end_of_cmd_line   = self.x == offset + cmd[self.y].count_graphemes();
-        let is_end_of_cmd_line = *self == cmd.end_of_cmd();
-
-        const ORIGIN: Coords = Coords::EDITOR_ORIGIN;
-        let is_top_editor_row = self.y == ORIGIN.y;
-        let is_bottom_editor_row = self.y == ORIGIN.y + editor_dims.height;
-        let is_leftmost_editor_column = self.x == ORIGIN.x;
-        let is_rightmost_editor_column = self.x == ORIGIN.x + editor_dims.width - 1;
-
-        // terminal::disable_raw_mode().unwrap();
-        // println!();
-        // println!("cursor={self:?}");
-        // println!("is_top_cmd_line={is_top_cmd_line}");
-        // println!("is_bottom_cmd_line={is_bottom_cmd_line}");
-        // println!("line kine={}", cmd[self.y].kind);
-        // println!("is_start_of_cmd_line={is_start_of_cmd_line}");
-        // println!("is_end_of_cmd_line={is_end_of_cmd_line}");
-        // println!("is_top_editor_row={is_top_editor_row}");
-        // println!("is_bottom_editor_row={is_bottom_editor_row}");
-        // println!("is_leftmost_editor_column={is_leftmost_editor_column}");
-        // println!("is_rightmost_editor_column={is_rightmost_editor_column}");
-        // terminal::enable_raw_mode().unwrap();
-
-        CursorFlags {
-            is_top_cmd_line,
-            is_bottom_cmd_line,
-            is_start_of_cmd_line,
-            is_end_of_cmd_line,
-            is_top_editor_row,
-            is_bottom_editor_row,
-            is_leftmost_editor_column,
-            is_rightmost_editor_column,
-            // is_continuation: cmd[self.y].is_continue(),
-        }
-    }
 }
 
 impl std::fmt::Display for Coords {
@@ -974,18 +887,21 @@ pub struct CursorFlags {
     /// Set to `true` iff. the Coords are in the bottom Cmd line.
     pub(crate) is_bottom_cmd_line: bool,
     /// Set to `true` iff. the Coords are at the start of a Cmd line.
-    pub(crate) is_start_of_cmd_line: bool,
+    pub(crate) is_start_of_cmd: bool,
     /// Set to `true` iff. the Coords are at the end of a Cmd line.
-    pub(crate) is_end_of_cmd_line: bool,
+    pub(crate) is_end_of_cmd: bool,
     /// Set to `true` iff. the Coords are in the top editor row.
     pub(crate) is_top_editor_row: bool,
     /// Set to `true` iff. the Coords are in the bottom editor row.
     pub(crate) is_bottom_editor_row: bool,
-    /// Set to `true` iff. the Coords are in the leftmost editor column.
+    /// Set to `true` iff. the Coords are at the leftmost editor column.
     pub(crate) is_leftmost_editor_column: bool,
-    /// Set to `true` iff. the Coords are in the rightmost editor column.
+    /// Set to `true` iff. the Coords are at the rightmost editor column.
     pub(crate) is_rightmost_editor_column: bool,
     // pub(crate) is_continuation: bool,
+    /// Set to `true` iff. the x-Coord is at the rightmost
+    /// column of the line indicated by the y-Coord.
+    pub(crate) is_end_of_cursor_line: bool,
 }
 
 #[derive(Debug)]

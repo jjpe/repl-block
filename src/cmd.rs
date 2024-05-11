@@ -1,6 +1,6 @@
 //!
 
-use crate::editor::{Coords, CursorFlags, Dims};
+use crate::editor::Coords;
 use unicode_segmentation::UnicodeSegmentation;
 
 
@@ -10,15 +10,13 @@ pub struct Cmd { lines: Vec<Line> }
 
 impl Default for Cmd {
     fn default() -> Self {
-        Self { lines: vec![Line::with_capacity(Self::LINE_CAPACITY)] }
+        Self { lines: vec![Line::new(LineKind::Start)] }
     }
 }
 
 impl Cmd {
-    const LINE_CAPACITY: usize = 200;
-
-    pub fn count_lines(&self) -> usize {
-        self.lines.len()
+    pub fn count_lines(&self) -> u16 {
+        self.lines.len() as u16
     }
 
     pub fn is_empty(&self) -> bool {
@@ -27,14 +25,20 @@ impl Cmd {
 
     pub fn insert_char(&mut self, pos: Coords, c: char) {
         if self.lines.is_empty() {
-            self.push_empty_line(LineKind::Start);
+            self.lines.push(Line::new_start());
         }
         self[pos.y].insert_char(pos.x, c);
     }
 
-    pub fn push_empty_line(&mut self, kind: LineKind) {
-        self.lines.push(Line::with_capacity(Self::LINE_CAPACITY));
-        self[Last].kind = kind;
+    pub fn insert_empty_line(&mut self, pos: Coords) {
+        self.lines.insert(pos.y as usize + 1, Line {
+            content: self[pos.y].graphemes().skip(pos.x as usize).collect(),
+            kind: LineKind::Start,
+        });
+        self[pos.y] = Line {
+            content: self[pos.y].graphemes().take(pos.x as usize).collect(),
+            kind: self[pos.y].kind,
+        };
     }
 
     pub fn pop_char(&mut self) {
@@ -54,87 +58,43 @@ impl Cmd {
     }
 
     /// Remove the grapheme before a given `pos`ition.
-    pub fn rm_grapheme_before(
-        &mut self,
-        pos: Coords,
-        // The width (in columns) of the Editor
-        editor_dims: Dims,
-        // The length of the prompt
-        prompt_len: u16,
-    ) {
+    pub fn rm_grapheme_before(&mut self, pos: Coords) {
         if self.is_empty() {
             return; // nothing to remove
         }
-
-        let CursorFlags {
-            is_top_cmd_line,
-            is_bottom_cmd_line,
-            is_start_of_cmd_line,
-            is_end_of_cmd_line,
-            is_top_editor_row,
-            is_bottom_editor_row,
-            is_leftmost_editor_column,
-            is_rightmost_editor_column,
-        } = pos.flags(editor_dims, prompt_len, self);
-
-        let is_continuation = self[pos.y].is_continue();
-        let is_prompt_line = pos.y == 0;
-        let is_start_of_prompt_line = pos.x <= prompt_len;
-        let is_start_of_nonprompt_line = if is_continuation {
-            pos.x == 0
-        } else {
-            pos.x <= prompt_len
-        };
-        if is_prompt_line && is_start_of_prompt_line {
-            // NOP: no graphemes to remove before origin
-        } else if is_prompt_line {
+        if pos.y == 0 && pos.x == 0 {
+            // NOP
+        } else if pos.y == 0 && pos.x > 0 {
             self[pos.y].rm_grapheme_before(pos.x);
-        } else { // not on the prompt line
-            if is_start_of_nonprompt_line {
-                let removed: Line = self.lines.remove(pos.y as usize);
-                self[pos.y - 1].push_str(removed.as_str());
-            } else { // not at the start of the line
-                self[pos.y].rm_grapheme_before(pos.x);
-            }
+        } else if pos.y > 0 && pos.x == 0 {
+            let removed: Line = self.lines.remove(pos.y as usize);
+            self[pos.y - 1].push_str(removed.as_str());
+        } else if pos.y > 0 && pos.x > 0 {
+            self[pos.y].rm_grapheme_before(pos.x);
+        } else {
+            let tag = "Cmd::rm_grapheme_before";
+            unreachable!("[{tag}] pos={pos:?}");
         }
-
-        // else if is_continuation {
-        //     if is_start_of_nonprompt_line {
-        //     } else {
-        //     }
-        // }
-        // else { // pos.x > 0
-        //     self.lines[pos.y as usize].rm_grapheme_before(pos.x);
-        // }
-
     }
 
     /// Remove the grapheme at a given `pos`ition.
-    pub fn rm_grapheme_at(
-        &mut self,
-        pos: Coords,
-        // // The width (in columns) of the Editor
-        // editor_width: u16,
-        // // The length of the prompt
-        // prompt_len: u16,
-    ) {
+    pub fn rm_grapheme_at(&mut self, pos: Coords) {
         if self.is_empty() {
             return; // nothing to remove
         }
-        self[pos.y].rm_grapheme_at(pos.x);
-
-        // let is_prompt_line = pos.x == 0;
-        // let is_start_of_prompt_line = pos.y == prompt_len;
-        // let is_start_of_nonprompt_line = pos.y == 0;
-        // if pos.x == 0 && pos.y == 0 {
-        //     self[pos.y].rm_grapheme_at(pos.x);
-        // } else if pos.x == 0 {
-        //     let removed: Line = self.lines.remove(pos.y as usize);
-        //     self[pos.y - 1].push_str(removed.as_str());
-        // } else { // pos.x > 0
-        //     self[pos.y].rm_grapheme_at(pos.x);
-        // }
-
+        let is_end_of_line = pos.x == self[pos.y].count_graphemes();
+        let has_next_line = pos.y + 1 < self.count_lines();
+        if is_end_of_line && has_next_line {
+            let removed: Line = self.lines.remove(pos.y as usize + 1);
+            self[pos.y].push_str(removed.as_str());
+        } else if is_end_of_line && !has_next_line {
+            // NOP
+        } else if !is_end_of_line {
+            self[pos.y].rm_grapheme_at(pos.x);
+        } else {
+            let tag = "Cmd::rm_grapheme_at";
+            unreachable!("[{tag}] pos={pos:?}");
+        }
     }
 
     pub fn lines(&self) -> &[Line] {
@@ -176,20 +136,11 @@ impl Cmd {
         // The length of the prompt
         prompt_len: u16,
     ) -> Self {
-        let mut ulines = vec![];
-        for line in self.lines().iter() {
-            if line.is_empty() {
-                ulines.push(line.clone());
-            } else {
-                ulines.extend(line.uncompress(editor_width, prompt_len));
-            }
+        Self {
+            lines: self.lines().iter()
+                .flat_map(|line| line.uncompress(editor_width, prompt_len))
+                .collect()
         }
-        if let Some((lidx, last)) = ulines.iter().enumerate().last() {
-            if last.fills_editor_width(editor_width, prompt_len, lidx) {
-                ulines.push(Line::new_continue());
-            }
-        }
-        Self { lines: ulines }
     }
 
     pub fn rm_line(&mut self, lineno: usize) {
@@ -197,7 +148,7 @@ impl Cmd {
     }
 
     pub fn max_line_idx(&self) -> Option<usize> {
-        let num_lines = self.count_lines();
+        let num_lines = self.count_lines() as usize;
         if num_lines > 0 {
             Some(num_lines - 1)
         } else {
@@ -303,23 +254,21 @@ pub struct Line {
 }
 
 impl Line {
+    const CAPACITY: usize = 200;
+
     fn new(kind: LineKind) -> Self {
-        Self { content: String::new(), kind }
+        Self {
+            content: String::with_capacity(Self::CAPACITY),
+            kind
+        }
     }
 
-    fn new_start() -> Self {
+    pub(crate) fn new_start() -> Self {
         Self::new(LineKind::Start)
     }
 
-    fn new_continue() -> Self {
+    pub(crate) fn new_continue() -> Self {
         Self::new(LineKind::Continue)
-    }
-
-    fn with_capacity(cap: usize) -> Self {
-        Self {
-            content: String::with_capacity(cap),
-            kind: LineKind::Start,
-        }
     }
 
     pub fn is_start(&self) -> bool {
@@ -380,14 +329,6 @@ impl Line {
         self.content.graphemes(true).count() as _
     }
 
-    // pub fn count_chars(&self) -> u16 {
-    //     self.content.chars().count() as _
-    // }
-
-    // pub fn count_bytes(&self) -> usize {
-    //     self.content.len() as _
-    // }
-
     pub fn push_char(&mut self, c: char) {
         self.content.push(c);
     }
@@ -406,7 +347,7 @@ impl Line {
 
     pub fn rm_grapheme_before(&mut self, xpos: u16) {
         if xpos == 0 {
-            return; // No graphemes to remove before the start of `self`
+            return; // No graphemes to remove
         }
         self.rm_grapheme_at(xpos - 1);
     }
@@ -423,23 +364,6 @@ impl Line {
         // println!("removed grapheme, line={self:?}");
     }
 
-    fn fills_editor_width(
-        &self,
-        // The width (in columns) of the Editor
-        editor_width: u16,
-        // The length of the prompt
-        prompt_len: u16,
-        line_idx: usize,
-    ) -> bool {
-        if line_idx == 0 {
-            self.count_graphemes() == editor_width - prompt_len
-        } else if self.is_start() {
-            self.count_graphemes() == editor_width - prompt_len
-        } else {
-            self.count_graphemes() == editor_width
-        }
-    }
-
     pub(crate) fn uncompress(
         &self,
         // The width (in columns) of the Editor
@@ -447,6 +371,10 @@ impl Line {
         // The length of the prompt
         prompt_len: u16,
     ) -> Vec<Self> {
+        if self.is_empty() {
+            return vec![Line::new(self.kind)];
+        }
+
         let mut ulines = vec![];
         let mut graphemes = self.graphemes().peekable();
 
