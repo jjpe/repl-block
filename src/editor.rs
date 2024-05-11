@@ -564,10 +564,10 @@ impl<'eval, W: Write> Editor<'eval, W> {
                     y: cursor.y + 1
                 };
             }
-            State::Navigate(NavigateState { preview, .. }) => {
+            State::Navigate(NavigateState { preview, cursor, .. }) => {
                 self.state = State::Edit(EditState {
                     buffer: std::mem::take(preview),
-                    cursor: preview.end_of_cmd(),
+                    cursor: *cursor,
                 });
                 self.cmd_insert_newline()?;
             }
