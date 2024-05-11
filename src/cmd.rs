@@ -41,22 +41,6 @@ impl Cmd {
         };
     }
 
-    pub fn pop_char(&mut self) {
-        if self.lines.is_empty() {
-            // NOP
-        } else if self[Last].is_empty() {
-            self.lines.pop().unwrap();
-        } else {
-            self[Last].pop().unwrap();
-        }
-    }
-
-    pub fn pop_chars(&mut self, num: usize) {
-        for _ in 0..num {
-            self.pop_char();
-        }
-    }
-
     /// Remove the grapheme before a given `pos`ition.
     pub fn rm_grapheme_before(&mut self, pos: Coords) {
         if self.is_empty() {
@@ -152,10 +136,6 @@ impl Cmd {
                 .flat_map(|line| line.uncompress(editor_width, prompt_len))
                 .collect()
         }
-    }
-
-    pub fn rm_line(&mut self, lineno: usize) {
-        self.lines.remove(lineno);
     }
 
     pub fn max_line_idx(&self) -> Option<usize> {
@@ -286,10 +266,6 @@ impl Line {
         self.kind == LineKind::Start
     }
 
-    pub fn is_overflow(&self) -> bool {
-        self.kind == LineKind::Overflow
-    }
-
     pub fn is_empty(&self) -> bool {
         self.content.is_empty()
     }
@@ -340,16 +316,8 @@ impl Line {
         self.content.graphemes(true).count() as _
     }
 
-    pub fn push_char(&mut self, c: char) {
-        self.content.push(c);
-    }
-
     pub fn push_str(&mut self, s: &str) {
         self.content.push_str(s);
-    }
-
-    pub fn pop(&mut self) -> Option<char> {
-        self.content.pop()
     }
 
     pub fn as_str(&self) -> &str {
