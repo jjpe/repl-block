@@ -26,6 +26,8 @@ pub struct EditorBuilder<'eval, W: Write> {
     continue_prompt: Vec<StyledContent<char>>,
     history_filepath: Utf8PathBuf,
     evaluator: Box<Evaluator<'eval>>,
+    hello_msg: String,
+    goodbye_msg: String,
 }
 
 impl<'eval> Default for EditorBuilder<'eval, Stdout> {
@@ -40,6 +42,8 @@ impl<'eval> Default for EditorBuilder<'eval, Stdout> {
             continue_prompt: vec!['ꞏ'.yellow(), 'ꞏ'.yellow(),       ' '.reset()],
             history_filepath: Utf8PathBuf::new(),
             evaluator: nop(),
+            hello_msg: format!("🖐 Press {} to exit.",  "Ctrl-D".magenta()),
+            goodbye_msg: "👋".to_string(),
         }
     }
 }
@@ -52,6 +56,8 @@ impl<'eval, W: Write> EditorBuilder<'eval, W> {
             continue_prompt: self.continue_prompt,
             history_filepath: self.history_filepath,
             evaluator: self.evaluator,
+            hello_msg: self.hello_msg,
+            goodbye_msg: self.goodbye_msg,
         }
     }
 
@@ -78,6 +84,16 @@ impl<'eval, W: Write> EditorBuilder<'eval, W> {
         self
     }
 
+    pub fn hello(mut self, hello_msg: impl Into<String>) -> Self {
+        self.hello_msg = hello_msg.into();
+        self
+    }
+
+    pub fn goodbye(mut self, goodbye_msg: impl Into<String>) -> Self {
+        self.goodbye_msg = goodbye_msg.into();
+        self
+    }
+
     pub fn build(self) -> ReplBlockResult<Editor<'eval, W>> {
         assert_eq!(
             self.default_prompt.len(), self.continue_prompt.len(),
@@ -89,6 +105,8 @@ impl<'eval, W: Write> EditorBuilder<'eval, W> {
             self.evaluator,
             self.default_prompt,
             self.continue_prompt,
+            self.hello_msg,
+            self.goodbye_msg,
         )?;
         editor.write_default_prompt(FlushPolicy::Flush)?;
         Ok(editor)
@@ -112,6 +130,8 @@ pub struct Editor<'eval, W: Write> {
     default_prompt: Vec<StyledContent<char>>,
     /// The command prompt used for command continuations
     continue_prompt: Vec<StyledContent<char>>,
+    hello_msg: String,
+    goodbye_msg: String,
 }
 
 impl<'eval, W: Write> Editor<'eval, W> {
@@ -121,6 +141,8 @@ impl<'eval, W: Write> Editor<'eval, W> {
         evaluator: Box<Evaluator<'eval>>,
         default_prompt: Vec<StyledContent<char>>,
         continue_prompt: Vec<StyledContent<char>>,
+        hello_msg: String,
+        goodbye_msg: String,
     ) -> ReplBlockResult<Editor<'eval, W>> {
         sink.flush()?;
         let mut editor = Self {
@@ -135,12 +157,14 @@ impl<'eval, W: Write> Editor<'eval, W> {
             evaluator,
             default_prompt,
             continue_prompt,
+            hello_msg,
+            goodbye_msg,
         };
         execute!(
             editor.sink,
             cursor::SetCursorStyle::BlinkingBar,
             cursor::MoveToColumn(0),
-            style::Print(format!("🖐 Press {} to exit.",  "Ctrl-D".magenta())),
+            style::Print(&editor.hello_msg),
             style::Print("\n"),
         )?;
         Ok(editor)
@@ -394,7 +418,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
             self.sink,
             cursor::SetCursorStyle::DefaultUserShape,
             cursor::MoveToColumn(0),
-            style::Print("👋"),
+            style::Print(&self.goodbye_msg),
             terminal::Clear(ClearType::FromCursorDown),
         )?;
         self.sink.flush()?;
