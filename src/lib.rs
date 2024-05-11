@@ -8,9 +8,7 @@ mod macros;
 
 pub mod prelude {
     pub use crate::{
-        cmd::{Cmd, Last},
-        editor::{Editor, EditorBuilder, FlushPolicy},
+        editor::{Editor, EditorBuilder},
         error::{ReplBlockError, ReplBlockResult},
-        history::{History, HistIdx},
     };
 }

@@ -221,7 +221,7 @@ impl std::ops::Index<usize> for Cmd {
 }
 
 
-pub struct Last;
+pub(crate) struct Last;
 
 impl std::ops::Index<Last> for Cmd {
     type Output = Line;

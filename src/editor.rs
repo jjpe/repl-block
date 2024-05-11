@@ -757,7 +757,7 @@ struct NavigateState {
 
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum FlushPolicy {
+pub(crate) enum FlushPolicy {
     Flush,
     NoFlush,
 }
