@@ -213,26 +213,13 @@ impl<'eval, W: Write> Editor<'eval, W> {
             let line = &cmd[cursor.y];
             let unlines_for_line = line.uncompress(editor_dims.width, prompt_len);
             for unline in unlines_for_line.iter() {
-                if unline.is_start() {
-                    let unline_len = unline.count_graphemes();
-                    let width = std::cmp::min(editor_dims.width, unline_len);
-                    if uncursor.x > width {
-                        uncursor.x -= width;
-                        uncursor.y += 1;
-                    } else {
-                        break;
-                    }
-                } else if unline.is_continue() {
-                    let unline_len = unline.count_graphemes();
-                    let width = std::cmp::min(editor_dims.width, unline_len);
-                    if uncursor.x > width {
-                        uncursor.x -= width;
-                        uncursor.y += 1;
-                    } else {
-                        break;
-                    }
+                let unline_len = unline.count_graphemes();
+                let width = std::cmp::min(editor_dims.width, unline_len);
+                if uncursor.x > width {
+                    uncursor.x -= width;
+                    uncursor.y += 1;
                 } else {
-                    unreachable!("This is a logic bug. Please file a bug report")
+                    break;
                 }
             }
             if uncompressed[uncursor.y as usize].is_start() {
@@ -380,24 +367,6 @@ impl<'eval, W: Write> Editor<'eval, W> {
         Ok(Coords { x: 0, y: term_height - self.height })
     }
 
-    // /// Return the (col, row)-coordinates of the cursor,
-    // /// relative to the top-left corner of `self`.
-    // /// The top left cell is represented as `(0, 0)`.
-    // fn cursor_position(&self) -> ReplBlockResult<Coords> {
-    //     self.cursor_position_relative_to(self.origin()?)
-    // }
-
-    // /// Query the global cursor position coordinates, then translate
-    // /// them to be relative to the `(x, y)` coordinates.
-    // fn cursor_position_relative_to(
-    //     &self,
-    //     origin: Coords,
-    // ) -> ReplBlockResult<Coords> {
-    //     let (cx, cy) = cursor::position()?;
-    //     Ok(Coords { x: cx - origin.x, y: cy - origin.y })
-    // }
-
-
     /// Return the (width, height) dimensions of `self`.
     /// The top left cell is represented `(1, 1)`.
     fn dimensions(&self) -> ReplBlockResult<Dims> {
@@ -446,7 +415,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
                     cursor: self.history[max_hidx].end_of_cmd(),
                 });
             }
-            State::Navigate(NavigateState { hidx, backup: _, preview, cursor }) => {
+            State::Navigate(NavigateState { hidx, preview, cursor, .. }) => {
                 let min_hidx = HistIdx(0);
                 if *hidx == min_hidx {
                     // NOP, at the top of the History
@@ -481,15 +450,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
     }
 
     fn cmd_nav_cmd_left(&mut self) -> ReplBlockResult<()> {
-        // let editor_dims = self.dimensions()?;
         let update_cursor = |cmd: &Cmd, cursor: &mut Coords| {
-            // let CursorFlags {
-            //     is_top_cmd_line: _,
-            //     is_start_of_cmd,
-            //     ..
-            // } = cursor.flags(editor_dims, cmd);
-
-            //if is_start_of_cmd {
             if *cursor == Coords::EDITOR_ORIGIN {
                 // NOP
             } else {
@@ -506,22 +467,6 @@ impl<'eval, W: Write> Editor<'eval, W> {
                     cursor.x -= 1;
                 }
             }
-
-            // if is_top_cmd_line && is_start_of_cmd {
-            //     // NOP
-            // } else if is_top_cmd_line && !is_start_of_cmd {
-            //     cursor.x -= 1;
-            // } else if !is_top_cmd_line && is_start_of_cmd {
-            //     *cursor = Coords {
-            //         x: cmd[cursor.y - 1].max_x(),
-            //         y: cursor.y - 1,
-            //     };
-            // } else if !is_top_cmd_line && !is_start_of_cmd {
-            //     cursor.x -= 1;
-            // } else {
-            //     panic!("[cmd_nav_cmd_left] Illegal cursor position: {cursor}");
-            // }
-
         };
         match &mut self.state {
             State::Edit(EditState { buffer, cursor }) => {
@@ -535,17 +480,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
     }
 
     fn cmd_nav_cmd_right(&mut self) -> ReplBlockResult<()> {
-        //let editor_dims = self.dimensions()?;
         let update_cursor = |cmd: &Cmd, cursor: &mut Coords| {
-            // let CursorFlags {
-            //     is_bottom_cmd_line,
-            //     is_top_cmd_line,
-            //     is_start_of_cmd,
-            //     is_end_of_cmd,
-            //     ..
-            // } = cursor.flags(editor_dims, cmd);
-
-            //if is_end_of_cmd {
             if *cursor == cmd.end_of_cmd() {
                 // NOP
             } else {
@@ -563,7 +498,6 @@ impl<'eval, W: Write> Editor<'eval, W> {
                     cursor.x += 1;
                 }
             }
-
         };
         match &mut self.state {
             State::Edit(EditState { buffer, cursor }) => {
@@ -744,10 +678,6 @@ pub struct Coords { pub x: u16, pub y: u16 }
 
 impl Coords {
     pub(crate) const EDITOR_ORIGIN: Self = Self { x: 0, y: 0 };
-
-    pub fn is_origin(&self) -> bool {
-        *self == Self::EDITOR_ORIGIN
-    }
 }
 
 impl std::fmt::Display for Coords {
