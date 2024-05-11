@@ -81,7 +81,7 @@ impl<'eval, W: Write> EditorBuilder<'eval, W> {
     pub fn build(self) -> ReplBlockResult<Editor<'eval, W>> {
         assert_eq!(
             self.default_prompt.len(), self.continue_prompt.len(),
-            "PRECONDITION FAILED: default_prompt.len() != continue_prompt.len()"
+            "default_prompt.len() != continue_prompt.len()"
         );
         let mut editor = Editor::new(
             self.sink,
