@@ -377,7 +377,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
     fn prompt_len(&self) -> u16 {
         assert_eq!(
             self.default_prompt.len(), self.continue_prompt.len(),
-            "PRECONDITION FAILED: default_prompt.len() != continue_prompt.len()"
+            "default_prompt.len() != continue_prompt.len()"
         );
         self.default_prompt.len() as u16
     }
