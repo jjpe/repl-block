@@ -65,15 +65,8 @@ impl History {
         idx
     }
 
-    pub fn last_cmd(&self) -> Option<&Cmd> {
-        self.cmds.back()
-    }
-
     // TODO: use this
     pub fn trim_cmds(&mut self) {
-        // while self.cmds.len() > UPPER_LIMIT {
-        //     self.cmds.pop_front();
-        // }
         self.cmds = self.cmds.drain(..)
             .rev()
             .unique() // purge the non-newest non-unique cmds
@@ -84,10 +77,6 @@ impl History {
 
     pub fn count_cmds(&self) -> usize {
         self.cmds.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.cmds.is_empty()
     }
 
     pub fn max_idx(&self) -> Option<HistIdx> {
