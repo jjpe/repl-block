@@ -55,16 +55,4 @@ macro_rules! key {
     };
 }
 
-macro_rules! in_raw_mode {
-    ($($expr:expr),+) => {{
-        ::crossterm::terminal::enable_raw_mode()?;
-        let result = $($expr),+ ;
-        ::crossterm::terminal::disable_raw_mode()?;
-        result
-    }}
-}
-
-pub(crate) use {
-    key,
-    in_raw_mode,
-};
+pub(crate) use key;

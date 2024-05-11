@@ -90,9 +90,6 @@ impl<'eval, W: Write> EditorBuilder<'eval, W> {
             self.default_prompt,
             self.continue_prompt,
         )?;
-        // The REPL operates in raw mode.  Raw mode is also explicitly turned
-        // on before reading input, and turned off again afterwards.
-        terminal::enable_raw_mode()?;
         editor.write_default_prompt(FlushPolicy::Flush)?;
         Ok(editor)
     }
@@ -160,7 +157,10 @@ impl<'eval, W: Write> Editor<'eval, W> {
     }
 
     fn dispatch_key_event(&mut self) -> ReplBlockResult<()> {
-        match event::read()? {
+        terminal::enable_raw_mode()?;
+        let event = event::read()?;
+        terminal::disable_raw_mode()?;
+        match event {
             Event::Key(key!(CONTROL-'c')) => self.cmd_nop()?,
 
             // Control application lifecycle:
@@ -258,7 +258,6 @@ impl<'eval, W: Write> Editor<'eval, W> {
                     queue!(self.sink, terminal::ScrollUp(1))?;
                 }
 
-                // terminal::disable_raw_mode()?;
                 // execute!(
                 //     self.sink,
                 //     cursor::MoveUp(terminal::size().unwrap().1),
@@ -272,7 +271,6 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 //     style::Print(format!("EDITOR DIMS: {editor_dims:?}\n")),
                 //     cursor::MoveDown(terminal::size().unwrap().1),
                 // )?;
-                // terminal::enable_raw_mode()?;
 
                 // Clear and prepare the input area
                 self.clear_input_area(FlushPolicy::NoFlush)?;
@@ -430,7 +428,6 @@ impl<'eval, W: Write> Editor<'eval, W> {
             style::Print("👋"),
             terminal::Clear(ClearType::FromCursorDown),
         )?;
-        terminal::disable_raw_mode()?; // Undo raw mode from start of program
         self.sink.flush()?;
         std::process::exit(0);
     }
@@ -722,12 +719,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 let cmd = std::mem::take(buffer);
                 let _hidx = self.history.add_cmd(cmd);
                 self.history.write_to_file(&self.history_filepath)?;
-                {   // Evaluation usually produces some output, and
-                    // that will be garbled if written in raw mode
-                    terminal::disable_raw_mode()?;
-                    (*self.evaluator)(source_code.as_str())?;
-                    terminal::enable_raw_mode()?;
-                }
+                (*self.evaluator)(source_code.as_str())?;
                 self.height = 1; // reset
                 *cursor = Coords::EDITOR_ORIGIN;
             }
