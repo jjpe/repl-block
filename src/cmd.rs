@@ -101,6 +101,7 @@ impl Cmd {
         self.lines.as_slice()
     }
 
+    #[cfg(test)]
     // Compression here means that all line continuations (which exist for the
     // purpose of line overflow rendering) have been merged with their starting
     // line.
@@ -110,17 +111,27 @@ impl Cmd {
         if self.is_empty() {
             return self.clone();
         }
-        let mut clines = vec![Line::new_start()];
-        for (lidx, line) in self.lines().iter().enumerate() {
-            if lidx == 0 { // nothing to continue
-                let last = clines.last_mut().unwrap();
-                last.push_str(line.as_str());
-            } else if line.kind == LineKind::Continue {
-                let last = clines.last_mut().unwrap();
-                last.push_str(line.as_str());
-            } else {
+        let mut clines = vec![];
+        for line in self.lines().iter() {
+            if line.is_start() {
                 clines.push(line.clone());
+            } else if line.is_continue() {
+                let prev = clines.last_mut().unwrap();
+                prev.push_str(line.as_str());
+            } else {
+                unreachable!();
             }
+
+            // if lidx == 0 { // nothing to continue
+            //     let last = clines.last_mut().unwrap();
+            //     last.push_str(line.as_str());
+            // } else if line.kind == LineKind::Continue {
+            //     let last = clines.last_mut().unwrap();
+            //     last.push_str(line.as_str());
+            // } else {
+            //     clines.push(line.clone());
+            // }
+
         }
         Self { lines: clines }
     }
@@ -353,7 +364,6 @@ impl Line {
     }
 
     pub fn rm_grapheme_at(&mut self, xpos: u16) {
-        // println!("removing grapheme, x_pos={xpos} line={self:?}");
         *self = Self {
             content: self.graphemes().enumerate()
                 .filter(|&(gidx, _)| gidx != xpos as usize)
@@ -361,7 +371,6 @@ impl Line {
                 .collect(),
             kind: self.kind,
         };
-        // println!("removed grapheme, line={self:?}");
     }
 
     pub(crate) fn uncompress(
@@ -482,7 +491,7 @@ mod test {
         let ucmd2 = Cmd {
             lines: vec![
                 Line {
-                    // length == term_cols- prompt_len
+                    // length == term_cols - prompt_len
                     content: r#"<xml a="b">hello<?do-it a proc instr?><!--a comment-->world<kid a="b"/><![CDATA[boom bam]]>&lt;&a"#.to_string(),
                     kind: LineKind::Start,
                 },

@@ -1,7 +1,7 @@
 //!
 
 use crate::{
-    cmd::{Cmd, Line, LineKind},
+    cmd::{Cmd, Line},
     error::ReplBlockResult,
     history::{History, HistIdx},
     macros::key,
@@ -100,7 +100,6 @@ impl<'eval, W: Write> EditorBuilder<'eval, W> {
 
 
 
-// #[derive(Debug)] TODO write manual impl
 pub struct Editor<'eval, W: Write> {
     sink: W,
     state: State,
@@ -197,11 +196,11 @@ impl<'eval, W: Write> Editor<'eval, W> {
         Ok(())
     }
 
-    fn render_ui(&mut self, old_editor_height: u16) ->ReplBlockResult<()> {
+    fn render_ui(&mut self, old_editor_height: u16) -> ReplBlockResult<()> {
         let editor_dims = self.dimensions()?;
         let prompt_len = self.prompt_len();
 
-        let calculate_uncursor = |cmd: &Cmd, cursor: Coords| {
+        let calculate_uncursor = |cmd: &Cmd, uncompressed: &Cmd, cursor: Coords| {
             let prev_unlines: Vec<Vec<Line>> = (0..cursor.y)
                 .map(|y| cmd[y].uncompress(editor_dims.width, prompt_len))
                 .collect();
@@ -212,8 +211,8 @@ impl<'eval, W: Write> Editor<'eval, W> {
                     .sum::<usize>() as u16,
             };
             let line = &cmd[cursor.y];
-            let unlines = line.uncompress(editor_dims.width, prompt_len);
-            for unline in unlines.iter() {
+            let unlines_for_line = line.uncompress(editor_dims.width, prompt_len);
+            for unline in unlines_for_line.iter() {
                 if unline.is_start() {
                     let unline_len = unline.count_graphemes();
                     let width = std::cmp::min(editor_dims.width, unline_len);
@@ -236,184 +235,86 @@ impl<'eval, W: Write> Editor<'eval, W> {
                     unreachable!("This is a logic bug. Please file a bug report")
                 }
             }
-
-            let all_unlines = cmd.uncompress(editor_dims.width, prompt_len);
-            if all_unlines[uncursor.y as usize].is_start() {
+            if uncompressed[uncursor.y as usize].is_start() {
                 uncursor.x += prompt_len;
             }
-
             uncursor
         };
 
+        macro_rules! render {
+            ($cmd:expr, $cursor:expr) => {{
+                let (cmd, cursor): (&Cmd, Coords) = ($cmd, $cursor);
+                let uncompressed = cmd.uncompress(editor_dims.width, prompt_len);
+
+                // Adjust the height of the input area
+                let num_uncompressed_lines = uncompressed.count_lines() as u16;
+                self.height = std::cmp::max(self.height, num_uncompressed_lines);
+
+                // Obtain an `uncompressed` version of `cursor`
+                let uncursor = calculate_uncursor(cmd, &uncompressed, cursor);
+
+                // Scroll up the old output *BEFORE* clearing the input area
+                for _ in old_editor_height..uncompressed.count_lines() {
+                    queue!(self.sink, terminal::ScrollUp(1))?;
+                }
+
+                // terminal::disable_raw_mode()?;
+                // execute!(
+                //     self.sink,
+                //     cursor::MoveUp(terminal::size().unwrap().1),
+                //     cursor::MoveToColumn(0),
+                //     terminal::Clear(ClearType::All),
+                //     style::Print(format!("CMD: {cmd:#?}\n")),
+                //     style::Print(format!("UNCOMPRESSED: {uncompressed:#?}\n")),
+                //     style::Print(format!("CURSOR: {cursor}\n")),
+                //     style::Print(format!("UNCURSOR: {uncursor}\n")),
+                //     style::Print(format!("TERM DIMS: {:?}\n", terminal::size()?)),
+                //     style::Print(format!("EDITOR DIMS: {editor_dims:?}\n")),
+                //     cursor::MoveDown(terminal::size().unwrap().1),
+                // )?;
+                // terminal::enable_raw_mode()?;
+
+                // Clear and prepare the input area
+                self.clear_input_area(FlushPolicy::NoFlush)?;
+                self.move_cursor_to_origin(FlushPolicy::NoFlush)?;
+
+                // Render the grid
+                for (lidx, lline) in uncompressed.lines().iter().enumerate() {
+                    if lidx == 0 {
+                        self.write_default_prompt(FlushPolicy::NoFlush)?;
+                        queue!(self.sink, style::Print(lline))?;
+                        queue!(self.sink, cursor::MoveDown(1))?;
+                        queue!(self.sink, cursor::MoveToColumn(0))?;
+                    } else if lline.is_start() {
+                        self.write_continue_prompt(FlushPolicy::NoFlush)?;
+                        queue!(self.sink, style::Print(lline))?;
+                        queue!(self.sink, cursor::MoveDown(1))?;
+                        // queue!(self.sink, cursor::MoveToColumn(0))?;
+                    } else {
+                        queue!(self.sink, style::Print(lline))?;
+                        queue!(self.sink, cursor::MoveDown(1))?;
+                        queue!(self.sink, cursor::MoveToColumn(0))?;
+                    }
+                }
+
+                // Render the uncursor
+                let origin = self.origin()?;
+                queue!(self.sink, cursor::MoveToColumn(origin.x + uncursor.x))?;
+                queue!(self.sink, cursor::MoveToRow(origin.y + uncursor.y))?;
+
+                ReplBlockResult::Ok(())
+            }};
+        }
+
         match &self.state {
             State::Edit(EditState { buffer, cursor }) => {
-                let cursor = *cursor; // Be like water: avoid borrowck complaint
-                let uncompressed = buffer.uncompress(editor_dims.width, prompt_len);
-                let num_uncompressed_lines = uncompressed.count_lines() as u16;
-                self.height = std::cmp::max(self.height, num_uncompressed_lines);
-
-                // Obtain an `uncompressed` version of `cursor`
-                let uncursor = calculate_uncursor(buffer, cursor);
-
-                // Scroll up the old output *BEFORE* clearing the input area
-                for _ in old_editor_height..uncompressed.count_lines() {
-                    queue!(self.sink, terminal::ScrollUp(1))?;
-                }
-
-                terminal::disable_raw_mode()?;
-                execute!(
-                    self.sink,
-                    // cursor::MoveUp(40),
-                    cursor::MoveUp(terminal::size().unwrap().1),
-                    cursor::MoveToColumn(0),
-                    terminal::Clear(ClearType::All),
-                    style::Print(format!("BUFFER: {buffer:#?}\n")),
-                    style::Print(format!("UNCOMPRESSED: {uncompressed:#?}\n")),
-                    style::Print(format!("CURSOR: {cursor}\n")),
-                    style::Print(format!("UNCURSOR: {uncursor}\n")),
-                    style::Print(format!("TERM DIMS: {:?}\n", terminal::size()?)),
-                    style::Print(format!("EDITOR DIMS: {editor_dims:?}\n")),
-                    // cursor::MoveDown(40),
-                    cursor::MoveDown(terminal::size().unwrap().1),
-                )?;
-                terminal::enable_raw_mode()?;
-
-                // Clear and prepare the input area
-                self.clear_input_area(FlushPolicy::NoFlush)?;
-                self.move_cursor_to_origin(FlushPolicy::NoFlush)?;
-
-                // Render the lines of the `uncompressed` cmd
-                for (lidx, lline) in uncompressed.lines().iter().enumerate() {
-                    if lidx == 0 {
-                        self.write_default_prompt(FlushPolicy::NoFlush)?;
-                        queue!(
-                            self.sink,
-                            style::Print(lline),
-                            cursor::MoveDown(1),
-                            cursor::MoveToColumn(0),
-                        )?;
-                    } else if lline.is_start() {
-                        self.write_continue_prompt(FlushPolicy::NoFlush)?;
-                        queue!(
-                            self.sink,
-                            style::Print(lline),
-                            cursor::MoveDown(1),
-                        )?;
-                    } else {
-                        queue!(
-                            self.sink,
-                            style::Print(lline),
-                            cursor::MoveDown(1),
-                            cursor::MoveToColumn(0),
-                        )?;
-                    }
-                }
-
-                // Rendser the uncursor
-                let origin = self.origin()?;
-                queue!(
-                    self.sink,
-                    cursor::MoveToColumn(origin.x + uncursor.x),
-                    cursor::MoveToRow(origin.y + uncursor.y),
-                )?;
+                render!(buffer, *cursor)?;
             }
             State::Navigate(NavigateState { preview, cursor, .. }) => {
-                let cursor = *cursor; // Be like water: avoid borrowck complaint
-                let uncompressed = preview.uncompress(editor_dims.width, prompt_len);
-                let num_uncompressed_lines = uncompressed.count_lines() as u16;
-                self.height = std::cmp::max(self.height, num_uncompressed_lines);
-
-                // Obtain an `uncompressed` version of `cursor`
-                let uncursor = calculate_uncursor(preview, cursor);
-
-                // Scroll up the old output *BEFORE* clearing the input area
-                for _ in old_editor_height..uncompressed.count_lines() {
-                    queue!(self.sink, terminal::ScrollUp(1))?;
-                }
-
-                terminal::disable_raw_mode()?;
-                execute!(
-                    self.sink,
-                    // cursor::MoveUp(40),
-                    cursor::MoveUp(terminal::size().unwrap().1),
-                    cursor::MoveToColumn(0),
-                    terminal::Clear(ClearType::All),
-                    style::Print(format!("PREVIEW: {preview:#?}\n")),
-                    style::Print(format!("UNCOMPRESSED: {uncompressed:#?}\n")),
-                    style::Print(format!("CURSOR: {cursor}\n")),
-                    style::Print(format!("UNCURSOR: {uncursor}\n")),
-                    style::Print(format!("TERM DIMS: {:?}\n", terminal::size()?)),
-                    style::Print(format!("EDITOR DIMS: {editor_dims:?}\n")),
-                    // cursor::MoveDown(40),
-                    cursor::MoveDown(terminal::size().unwrap().1),
-                )?;
-                terminal::enable_raw_mode()?;
-
-                // Clear and prepare the input area
-                self.move_cursor_to_origin(FlushPolicy::NoFlush)?;
-                self.clear_input_area(FlushPolicy::NoFlush)?;
-                // self.write_default_prompt(FlushPolicy::NoFlush)?;
-
-                // for uline in uncompressed.lines().iter() {
-                //     queue!(
-                //         self.sink,
-                //         style::Print(uline),
-                //         cursor::MoveDown(1),
-                //         cursor::MoveToColumn(0),
-                //     )?;
-                // }
-                for (lidx, lline) in uncompressed.lines().iter().enumerate() {
-                    if lidx == 0 {
-                        self.write_default_prompt(FlushPolicy::NoFlush)?;
-                        queue!(
-                            self.sink,
-                            style::Print(lline),
-                            cursor::MoveDown(1),
-                            cursor::MoveToColumn(0),
-                        )?;
-                    } else if lline.is_start() {
-                        self.write_continue_prompt(FlushPolicy::NoFlush)?;
-                        queue!(
-                            self.sink,
-                            style::Print(lline),
-                            cursor::MoveDown(1),
-                        )?;
-                    } else {
-                        queue!(
-                            self.sink,
-                            style::Print(lline),
-                            cursor::MoveDown(1),
-                            cursor::MoveToColumn(0),
-                        )?;
-                    }
-                }
-
-                // Rendser the uncursor
-                let o = self.origin()?;
-                queue!(
-                    self.sink,
-                    // cursor::MoveTo(o.x + uncursor.x, o.y + uncursor.y),
-                    cursor::MoveToColumn(o.x + uncursor.x),
-                    cursor::MoveToRow(o.y + uncursor.y),
-                )?;
-
-                // self.move_cursor_to(FlushPolicy::NoFlush, cursor)?;
-
-
-                // if let Some(last) = lines.last() {
-                //     self.move_cursor_to(FlushPolicy::NoFlush, Coords {
-                //         x: if lines.len() == 1 {
-                //             prompt_len + last.count_graphemes()
-                //         } else {
-                //             last.count_graphemes()
-                //         },
-                //         y: lines.len() as u16 - 1,
-                //     })?;
-                // }
-
-
+                render!(preview, *cursor)?;
             }
         }
+
         self.sink.flush()?;
         Ok(())
     }
@@ -807,7 +708,6 @@ impl<'eval, W: Write> Editor<'eval, W> {
 
     /// Execute the current cmd
     fn cmd_eval(&mut self) -> ReplBlockResult<()> {
-        let prompt_len = self.prompt_len();
         match &mut self.state {
             State::Edit(EditState { buffer, cursor }) => {
                 #[allow(unstable_name_collisions)]
@@ -829,7 +729,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
                     terminal::enable_raw_mode()?;
                 }
                 self.height = 1; // reset
-                *cursor = Coords { x: prompt_len, y: 0 };
+                *cursor = Coords::EDITOR_ORIGIN;
             }
             State::Navigate(NavigateState { preview, cursor, .. }) => {
                 self.state = State::Edit(EditState {
@@ -881,49 +781,10 @@ impl std::ops::Sub<Self> for Coords {
 }
 
 
-pub struct CursorFlags {
-    /// Set to `true` iff. the Coords are in the top Cmd line.
-    pub(crate) is_top_cmd_line: bool,
-    /// Set to `true` iff. the Coords are in the bottom Cmd line.
-    pub(crate) is_bottom_cmd_line: bool,
-    /// Set to `true` iff. the Coords are at the start of a Cmd line.
-    pub(crate) is_start_of_cmd: bool,
-    /// Set to `true` iff. the Coords are at the end of a Cmd line.
-    pub(crate) is_end_of_cmd: bool,
-    /// Set to `true` iff. the Coords are in the top editor row.
-    pub(crate) is_top_editor_row: bool,
-    /// Set to `true` iff. the Coords are in the bottom editor row.
-    pub(crate) is_bottom_editor_row: bool,
-    /// Set to `true` iff. the Coords are at the leftmost editor column.
-    pub(crate) is_leftmost_editor_column: bool,
-    /// Set to `true` iff. the Coords are at the rightmost editor column.
-    pub(crate) is_rightmost_editor_column: bool,
-    // pub(crate) is_continuation: bool,
-    /// Set to `true` iff. the x-Coord is at the rightmost
-    /// column of the line indicated by the y-Coord.
-    pub(crate) is_end_of_cursor_line: bool,
-}
-
 #[derive(Debug)]
 enum State {
     Edit(EditState),
     Navigate(NavigateState),
-}
-
-impl State {
-    fn as_edit(&self) -> ReplBlockResult<&EditState> {
-        match &self {
-            Self::Edit(es) => Ok(es),
-            Self::Navigate(_) => panic!("Expected State::Edit(_); Got {self:?}"),
-        }
-    }
-
-    fn as_navigate(&self) -> ReplBlockResult<&NavigateState> {
-        match &self {
-            Self::Edit(_) => panic!("Expected State::Nsvigate(_); Got {self:?}"),
-            Self::Navigate(ns) => Ok(ns),
-        }
-    }
 }
 
 /// Editing a `Cmd`
