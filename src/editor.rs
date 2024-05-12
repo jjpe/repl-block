@@ -108,7 +108,8 @@ impl<'eval, W: Write> EditorBuilder<'eval, W> {
             self.hello_msg,
             self.goodbye_msg,
         )?;
-        editor.write_default_prompt(FlushPolicy::Flush)?;
+        editor.write_default_prompt()?;
+        editor.sink.flush()?;
         Ok(editor)
     }
 }
@@ -284,18 +285,18 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 // )?;
 
                 // Clear and prepare the input area
-                self.clear_input_area(FlushPolicy::NoFlush)?;
-                self.move_cursor_to_origin(FlushPolicy::NoFlush)?;
+                self.clear_input_area()?;
+                self.move_cursor_to_origin()?;
 
                 // Render the grid
                 for (lidx, lline) in uncompressed.lines().iter().enumerate() {
                     if lidx == 0 {
-                        self.write_default_prompt(FlushPolicy::NoFlush)?;
+                        self.write_default_prompt()?;
                         queue!(self.sink, style::Print(lline))?;
                         queue!(self.sink, cursor::MoveDown(1))?;
                         queue!(self.sink, cursor::MoveToColumn(0))?;
                     } else if lline.is_start() {
-                        self.write_continue_prompt(FlushPolicy::NoFlush)?;
+                        self.write_continue_prompt()?;
                         queue!(self.sink, style::Print(lline))?;
                         queue!(self.sink, cursor::MoveDown(1))?;
                         // queue!(self.sink, cursor::MoveToColumn(0))?;
@@ -330,57 +331,41 @@ impl<'eval, W: Write> Editor<'eval, W> {
 
     fn write_default_prompt(
         &mut self,
-        flush_policy: FlushPolicy,
     ) -> ReplBlockResult<&mut Self> {
         queue!(self.sink, cursor::MoveToColumn(0))?;
         for &c in &self.default_prompt {
             queue!(self.sink, style::Print(c))?;
-        }
-        if let FlushPolicy::Flush = flush_policy {
-            self.sink.flush()?;
         }
         Ok(self)
     }
 
     fn write_continue_prompt(
         &mut self,
-        flush_policy: FlushPolicy,
     ) -> ReplBlockResult<()> {
         queue!(self.sink, cursor::MoveToColumn(0))?;
         for &c in &self.continue_prompt {
             queue!(self.sink, style::Print(c))?;
-        }
-        if let FlushPolicy::Flush = flush_policy {
-            self.sink.flush()?;
         }
         Ok(())
     }
 
     fn move_cursor_to_origin(
         &mut self,
-        flush_policy: FlushPolicy,
     ) -> ReplBlockResult<()> {
         let origin = self.origin()?;
         queue!(self.sink, cursor::MoveTo(origin.x, origin.y))?;
-        if let FlushPolicy::Flush = flush_policy {
-            self.sink.flush()?;
-        }
         Ok(())
     }
 
     fn clear_input_area(
         &mut self,
-        flush_policy: FlushPolicy,
     ) -> ReplBlockResult<()> {
-        self.move_cursor_to_origin(FlushPolicy::NoFlush)?;
+        self.move_cursor_to_origin()?;
         for _ in 0..self.height {
             queue!(self.sink, terminal::Clear(ClearType::CurrentLine))?;
             queue!(self.sink, cursor::MoveDown(1))?;
         }
-        self.move_cursor_to_origin(FlushPolicy::NoFlush)?;
-        if let FlushPolicy::Flush = flush_policy {
-            self.sink.flush()?;
-        }
+        self.move_cursor_to_origin()?;
         Ok(())
     }
 
@@ -753,11 +738,4 @@ struct NavigateState {
     preview: Cmd,
     /// The cursor position within the Cmd preview buffer
     cursor: Coords,
-}
-
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum FlushPolicy {
-    Flush,
-    NoFlush,
 }
