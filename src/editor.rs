@@ -650,12 +650,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
     fn cmd_eval(&mut self) -> ReplBlockResult<()> {
         match &mut self.state {
             State::Edit(EditState { buffer, cursor }) => {
-                #[allow(unstable_name_collisions)]
-                let source_code = buffer.lines().iter()
-                    .filter(|line| !line.is_empty())
-                    .map(Line::as_str)
-                    .intersperse("\n")
-                    .collect::<String>();
+                let source_code = buffer.to_source_code();
                 if source_code.is_empty() {
                     return Ok(());
                 }

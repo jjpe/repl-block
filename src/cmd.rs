@@ -156,6 +156,16 @@ impl Cmd {
             .unwrap_or(Coords::EDITOR_ORIGIN)
     }
 
+    pub fn to_source_code(&self) -> String {
+        use itertools::Itertools;
+        #[allow(unstable_name_collisions)] // for the .intersperse() call below
+        self.lines.iter()
+            .filter(|line| !line.is_empty())
+            .map(Line::as_str)
+            .intersperse("\n")
+            .collect()
+    }
+
 }
 
 impl std::fmt::Display for Cmd {
