@@ -99,7 +99,7 @@ impl Cmd {
         for line in self.lines().iter() {
             if line.is_start() {
                 clines.push(line.clone());
-            } else if line.is_overflow() {
+            } else if line.kind == LineKind::Overflow {
                 let prev = clines.last_mut().unwrap();
                 prev.push_str(line.as_str());
             } else {
