@@ -14,7 +14,9 @@ use crossterm::{
     terminal::ClearType,
 };
 use itertools::Itertools;
+use regex::Regex;
 use std::io::{Stdout, Write};
+use unicode_segmentation::UnicodeSegmentation;
 
 
 type Evaluator<'eval> =
@@ -24,6 +26,7 @@ pub struct EditorBuilder<'eval, W: Write> {
     sink: W,
     default_prompt: Vec<StyledContent<char>>,
     continue_prompt: Vec<StyledContent<char>>,
+    reverse_search_prompt: Vec<StyledContent<char>>,
     history_filepath: Utf8PathBuf,
     evaluator: Box<Evaluator<'eval>>,
     hello_msg: String,
@@ -40,6 +43,24 @@ impl<'eval> Default for EditorBuilder<'eval, Stdout> {
             sink: std::io::stdout(),
             default_prompt:  vec!['■'.yellow(), '>'.green().bold(), ' '.reset()],
             continue_prompt: vec!['ꞏ'.yellow(), 'ꞏ'.yellow(),       ' '.reset()],
+            reverse_search_prompt: vec![
+                'r'.yellow().italic(),
+                'e'.yellow().italic(),
+                'v'.yellow().italic(),
+                'e'.yellow().italic(),
+                'r'.yellow().italic(),
+                's'.yellow().italic(),
+                'e'.yellow().italic(),
+                ' '.reset(),
+                's'.yellow().italic(),
+                'e'.yellow().italic(),
+                'a'.yellow().italic(),
+                'r'.yellow().italic(),
+                'c'.yellow().italic(),
+                'h'.yellow().italic(),
+                ':'.blue().italic(),
+                ' '.reset(),
+            ],
             history_filepath: Utf8PathBuf::new(),
             evaluator: nop(),
             hello_msg: format!("🖐 Press {} to exit.",  "Ctrl-D".magenta()),
@@ -54,6 +75,7 @@ impl<'eval, W: Write> EditorBuilder<'eval, W> {
             sink,
             default_prompt: self.default_prompt,
             continue_prompt: self.continue_prompt,
+            reverse_search_prompt: self.reverse_search_prompt,
             history_filepath: self.history_filepath,
             evaluator: self.evaluator,
             hello_msg: self.hello_msg,
@@ -68,6 +90,11 @@ impl<'eval, W: Write> EditorBuilder<'eval, W> {
 
     pub fn continue_prompt(mut self, prompt: Vec<StyledContent<char>>) -> Self {
         self.continue_prompt = prompt;
+        self
+    }
+
+    pub fn reverse_search_prompt(mut self, prompt: Vec<StyledContent<char>>) -> Self {
+        self.reverse_search_prompt = prompt;
         self
     }
 
@@ -105,10 +132,11 @@ impl<'eval, W: Write> EditorBuilder<'eval, W> {
             self.evaluator,
             self.default_prompt,
             self.continue_prompt,
+            self.reverse_search_prompt,
             self.hello_msg,
             self.goodbye_msg,
         )?;
-        editor.write_default_prompt()?;
+        editor.render_default_prompt()?;
         editor.sink.flush()?;
         Ok(editor)
     }
@@ -131,6 +159,8 @@ pub struct Editor<'eval, W: Write> {
     default_prompt: Vec<StyledContent<char>>,
     /// The command prompt used for command continuations
     continue_prompt: Vec<StyledContent<char>>,
+    /// The prompt used for reverse history search
+    reverse_search_prompt: Vec<StyledContent<char>>,
     hello_msg: String,
     goodbye_msg: String,
 }
@@ -142,6 +172,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
         evaluator: Box<Evaluator<'eval>>,
         default_prompt: Vec<StyledContent<char>>,
         continue_prompt: Vec<StyledContent<char>>,
+        reverse_search_prompt: Vec<StyledContent<char>>,
         hello_msg: String,
         goodbye_msg: String,
     ) -> ReplBlockResult<Editor<'eval, W>> {
@@ -158,6 +189,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
             evaluator,
             default_prompt,
             continue_prompt,
+            reverse_search_prompt,
             hello_msg,
             goodbye_msg,
         };
@@ -190,6 +222,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
 
             // Control application lifecycle:
             Event::Key(key!(CONTROL-'d')) => self.cmd_exit_repl()?,
+            Event::Key(key!(CONTROL-'g')) => self.cmd_cancel_nav()?,
             Event::Key(key!(@name Enter)) => self.cmd_eval()?,
 
             // Navigation:
@@ -205,6 +238,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
             Event::Key(key!(@name Home))  => self.cmd_nav_to_start_of_cmd()?,
             Event::Key(key!(CONTROL-'e')) => self.cmd_nav_to_end_of_cmd()?,
             Event::Key(key!(@name End))   => self.cmd_nav_to_end_of_cmd()?,
+            Event::Key(key!(CONTROL-'r')) => self.cmd_reverse_search_history()?,
 
             // Editing;
             Event::Key(key!(@c))                => self.cmd_insert_char(c)?,
@@ -247,7 +281,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
                     break;
                 }
             }
-            if uncompressed[uncursor.y as usize].is_start() {
+            if uncompressed[uncursor.y].is_start() {
                 uncursor.x += prompt_len;
             }
             uncursor
@@ -259,14 +293,15 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 let uncompressed = cmd.uncompress(editor_dims.width, prompt_len);
 
                 // Adjust the height of the input area
-                let num_uncompressed_lines = uncompressed.count_lines() as u16;
-                self.height = std::cmp::max(self.height, num_uncompressed_lines);
+                let num_unlines = uncompressed.count_lines() as u16;
+                let content_height = num_unlines;
+                self.height = std::cmp::max(self.height, content_height);
 
                 // Obtain an `uncompressed` version of `cursor`
                 let uncursor = calculate_uncursor(cmd, &uncompressed, cursor);
 
                 // Scroll up the old output *BEFORE* clearing the input area
-                for _ in old_editor_height..uncompressed.count_lines() {
+                for _ in old_editor_height..content_height {
                     queue!(self.sink, terminal::ScrollUp(1))?;
                 }
 
@@ -284,33 +319,14 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 //     cursor::MoveDown(terminal::size().unwrap().1),
                 // )?;
 
-                // Clear and prepare the input area
                 self.clear_input_area()?;
                 self.move_cursor_to_origin()?;
-
-                // Render the grid
-                for (lidx, lline) in uncompressed.lines().iter().enumerate() {
-                    if lidx == 0 {
-                        self.write_default_prompt()?;
-                        queue!(self.sink, style::Print(lline))?;
-                        queue!(self.sink, cursor::MoveDown(1))?;
-                        queue!(self.sink, cursor::MoveToColumn(0))?;
-                    } else if lline.is_start() {
-                        self.write_continue_prompt()?;
-                        queue!(self.sink, style::Print(lline))?;
-                        queue!(self.sink, cursor::MoveDown(1))?;
-                        // queue!(self.sink, cursor::MoveToColumn(0))?;
-                    } else {
-                        queue!(self.sink, style::Print(lline))?;
-                        queue!(self.sink, cursor::MoveDown(1))?;
-                        queue!(self.sink, cursor::MoveToColumn(0))?;
-                    }
-                }
+                self.render_cmd(&uncompressed)?;
 
                 // Render the uncursor
-                let origin = self.origin()?;
-                queue!(self.sink, cursor::MoveToColumn(origin.x + uncursor.x))?;
-                queue!(self.sink, cursor::MoveToRow(origin.y + uncursor.y))?;
+                let o = self.origin()?;
+                queue!(self.sink, cursor::MoveToColumn(o.x + uncursor.x))?;
+                queue!(self.sink, cursor::MoveToRow(o.y + uncursor.y))?;
 
                 ReplBlockResult::Ok(())
             }};
@@ -323,13 +339,63 @@ impl<'eval, W: Write> Editor<'eval, W> {
             State::Navigate(NavigateState { preview, cursor, .. }) => {
                 render!(preview, *cursor)?;
             }
+            State::Search(SearchState { regex, preview, cursor, .. }) => {
+                let (cmd, cursor): (&Cmd, Coords) = (preview, *cursor);
+                let uncompressed = cmd.uncompress(editor_dims.width, prompt_len);
+                let regex = regex.clone();
+
+                // Adjust the height of the input area
+                let num_unlines = uncompressed.count_lines() as u16;
+                const SEARCH_PROMPT_LINE: u16 = 1;
+                let content_height = num_unlines + SEARCH_PROMPT_LINE;
+                self.height = std::cmp::max(self.height, content_height);
+
+                // Scroll up the old output *BEFORE* clearing the input area
+                for _ in old_editor_height..content_height {
+                    queue!(self.sink, terminal::ScrollUp(1))?;
+                }
+
+                self.clear_input_area()?;
+                self.move_cursor_to_origin()?;
+                self.render_cmd(&uncompressed)?;
+                self.render_reverse_search_prompt()?;
+
+                // Render the reverse search topic
+                queue!(self.sink, style::Print(regex))?;
+
+                let o = self.origin()?;
+                // Render the search prompt cursor
+                queue!(self.sink, cursor::MoveToRow(o.y + cursor.y + self.height))?;
+                queue!(self.sink, cursor::MoveToColumn(o.x + cursor.x))?;
+            }
         }
 
         self.sink.flush()?;
         Ok(())
     }
 
-    fn write_default_prompt(
+    fn render_cmd(&mut self, uncompressed: &Cmd, ) -> ReplBlockResult<()> {
+        for (ulidx, unline) in uncompressed.lines().iter().enumerate() {
+            if ulidx == 0 {
+                self.render_default_prompt()?;
+                queue!(self.sink, style::Print(unline))?;
+                queue!(self.sink, cursor::MoveDown(1))?;
+                queue!(self.sink, cursor::MoveToColumn(0))?;
+            } else if unline.is_start() {
+                self.render_continue_prompt()?;
+                queue!(self.sink, style::Print(unline))?;
+                queue!(self.sink, cursor::MoveDown(1))?;
+                // queue!(self.sink, cursor::MoveToColumn(0))?;
+            } else {
+                queue!(self.sink, style::Print(unline))?;
+                queue!(self.sink, cursor::MoveDown(1))?;
+                queue!(self.sink, cursor::MoveToColumn(0))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn render_default_prompt(
         &mut self,
     ) -> ReplBlockResult<&mut Self> {
         queue!(self.sink, cursor::MoveToColumn(0))?;
@@ -339,11 +405,24 @@ impl<'eval, W: Write> Editor<'eval, W> {
         Ok(self)
     }
 
-    fn write_continue_prompt(
+    fn render_continue_prompt(
         &mut self,
     ) -> ReplBlockResult<()> {
         queue!(self.sink, cursor::MoveToColumn(0))?;
         for &c in &self.continue_prompt {
+            queue!(self.sink, style::Print(c))?;
+        }
+        Ok(())
+    }
+
+    fn render_reverse_search_prompt(
+        &mut self,
+    ) -> ReplBlockResult<()> {
+        let origin = self.origin()?;
+        // Position the cursor to write the reverse search prompt
+        queue!(self.sink, cursor::MoveTo(origin.x, origin.y + self.height))?;
+        // Render the reverse search prompt
+        for c in &self.reverse_search_prompt {
             queue!(self.sink, style::Print(c))?;
         }
         Ok(())
@@ -410,6 +489,27 @@ impl<'eval, W: Write> Editor<'eval, W> {
         std::process::exit(0);
     }
 
+    fn cmd_cancel_nav(&mut self) -> ReplBlockResult<()> {
+        match &mut self.state {
+            State::Edit(EditState { .. }) => {
+                // NOP
+            }
+            State::Navigate(NavigateState { backup, .. }) => {
+                self.state = State::Edit(EditState {
+                    cursor: backup.end_of_cmd(),
+                    buffer: std::mem::take(backup),
+                });
+            }
+            State::Search(SearchState { backup, .. }) => {
+                self.state = State::Edit(EditState {
+                    cursor: backup.end_of_cmd(),
+                    buffer: std::mem::take(backup),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Navigate up in the History
     fn cmd_nav_history_up(&mut self) -> ReplBlockResult<()> {
         match &mut self.state {
@@ -434,6 +534,19 @@ impl<'eval, W: Write> Editor<'eval, W> {
                     *cursor = preview.end_of_cmd();
                 }
             }
+            State::Search(SearchState { preview, matches, current, .. }) => {
+                if *current >= matches.len() - 1 {
+                    // NOP
+                } else {
+                    *current += 1;
+                    *preview = if matches.is_empty() {
+                        Cmd::default()
+                    } else {
+                        let hidx = matches[*current];
+                        self.history[hidx].clone()
+                    };
+                }
+            }
         }
         Ok(())
     }
@@ -452,6 +565,19 @@ impl<'eval, W: Write> Editor<'eval, W> {
                     *hidx += 1;
                     *preview = self.history[*hidx].clone(); // update
                     *cursor = preview.end_of_cmd();
+                }
+            }
+            State::Search(SearchState { preview, matches, current, .. }) => {
+                if *current == 0 {
+                    // NOP
+                } else {
+                    *current -= 1;
+                    *preview = if matches.is_empty() {
+                        Cmd::default()
+                    } else {
+                        let hidx = matches[*current];
+                        self.history[hidx].clone()
+                    };
                 }
             }
         }
@@ -484,6 +610,14 @@ impl<'eval, W: Write> Editor<'eval, W> {
             State::Navigate(NavigateState { preview, cursor, .. }) => {
                 update_cursor(preview, cursor);
             },
+            State::Search(SearchState { cursor, .. }) => {
+                let prompt_len = self.reverse_search_prompt.len() as u16;
+                if cursor.x <= prompt_len {
+                    cursor.x = prompt_len; // bound here
+                } else {
+                    cursor.x -= 1;
+                }
+            },
         }
         Ok(())
     }
@@ -515,6 +649,15 @@ impl<'eval, W: Write> Editor<'eval, W> {
             State::Navigate(NavigateState { preview, cursor, .. }) => {
                 update_cursor(preview, cursor);
             },
+            State::Search(SearchState { regex, cursor, .. }) => {
+                let prompt_len = self.reverse_search_prompt.len() as u16;
+                let regex_line_len = regex.graphemes(true).count() as u16;
+                if cursor.x >= prompt_len + regex_line_len {
+                    cursor.x = prompt_len + regex_line_len; // bound here
+                } else {
+                    cursor.x += 1;
+                }
+            },
         }
         Ok(())
     }
@@ -527,6 +670,10 @@ impl<'eval, W: Write> Editor<'eval, W> {
             },
             State::Navigate(NavigateState { cursor, .. }) => {
                 *cursor = Coords::EDITOR_ORIGIN;
+            },
+            State::Search(SearchState { cursor, .. }) => {
+                let prompt_len = self.reverse_search_prompt.len() as u16;
+                cursor.x = prompt_len;
             },
         }
         Ok(())
@@ -541,12 +688,64 @@ impl<'eval, W: Write> Editor<'eval, W> {
             State::Navigate(NavigateState { preview, cursor, .. }) => {
                 *cursor = preview.end_of_cmd();
             },
+            State::Search(SearchState { regex, cursor, .. }) => {
+                let prompt_len = self.reverse_search_prompt.len() as u16;
+                let regex_line_len = regex.graphemes(true).count() as u16;
+                cursor.x = prompt_len + regex_line_len;
+            },
+        }
+        Ok(())
+    }
+
+    fn cmd_reverse_search_history(&mut self) -> ReplBlockResult<()> {
+        match &mut self.state {
+            State::Edit(EditState { buffer, cursor }) => {
+                self.state = State::Search(SearchState {
+                    regex: String::new(),
+                    backup: std::mem::take(buffer),
+                    preview: Cmd::default(),
+                    cursor: *cursor,
+                    matches: vec![],
+                    current: 0,
+                });
+                self.cmd_reverse_search_history()?;
+            }
+            State::Navigate(NavigateState { hidx: _, backup, preview, cursor }) => {
+                self.state = State::Search(SearchState {
+                    regex: String::new(),
+                    backup: std::mem::take(backup),
+                    preview: std::mem::take(preview),
+                    cursor: *cursor,
+                    matches: vec![],
+                    current: 0,
+                });
+                self.cmd_reverse_search_history()?;
+            }
+            State::Search(SearchState {
+                regex,
+                backup: _,
+                preview,
+                cursor,
+                matches,
+                current,
+            }) => {
+                *matches = self.history.reverse_search(regex);
+                *current = 0;
+                *preview = if matches.is_empty() {
+                    Cmd::default()
+                } else {
+                    self.history[matches[*current]].clone()
+                };
+                let prompt_len = self.reverse_search_prompt.len() as u16;
+                *cursor = Coords { x: prompt_len, y: Coords::EDITOR_ORIGIN.y };
+            }
         }
         Ok(())
     }
 
     /// Insert a char into the current cmd at cursor position.
     fn cmd_insert_char(&mut self, c: char) -> ReplBlockResult<()> {
+        let editor_dims = self.dimensions()?;
         match &mut self.state {
             State::Edit(EditState { buffer, cursor }) => {
                 buffer.insert_char(*cursor, c);
@@ -558,6 +757,32 @@ impl<'eval, W: Write> Editor<'eval, W> {
                     cursor: *cursor,
                 });
                 self.cmd_insert_char(c)?;
+            }
+            State::Search(SearchState {
+                regex,
+                backup: _,
+                preview,
+                cursor,
+                matches,
+                current,
+            }) => {
+                let prompt_len = self.reverse_search_prompt.len();
+                if regex.len() >= editor_dims.width as usize - prompt_len - 1 {
+                    return Ok(()); // NOP
+                }
+                let mut re: Vec<&str> = regex.graphemes(true).collect();
+                let c = c.to_string();
+                re.insert(cursor.x as usize - prompt_len, &c);
+                *regex = re.into_iter().collect::<String>();
+                cursor.x += 1;
+                *matches = self.history.reverse_search(regex);
+                *current = 0;
+                *preview = if matches.is_empty() {
+                    Cmd::default()
+                } else {
+                    let hidx = matches[*current];
+                    self.history[hidx].clone()
+                };
             }
         }
         Ok(())
@@ -579,6 +804,9 @@ impl<'eval, W: Write> Editor<'eval, W> {
                     cursor: *cursor,
                 });
                 self.cmd_insert_newline()?;
+            }
+            State::Search(SearchState { .. }) => {
+                // NOP
             }
         }
         Ok(())
@@ -613,6 +841,31 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 });
                 self.cmd_rm_grapheme_before_cursor()?;
             }
+            State::Search(SearchState {
+                regex,
+                backup: _,
+                preview,
+                cursor,
+                matches,
+                current,
+            }) => {
+                let prompt_len = self.reverse_search_prompt.len();
+                let rmidx = cursor.x as usize - prompt_len;
+                if regex.len() == 0 || rmidx == 0 {
+                    return Ok(()); // NOP
+                }
+                let mut re: Vec<&str> = regex.graphemes(true).collect();
+                re.remove(cursor.x as usize - prompt_len - 1);
+                *regex = re.into_iter().collect::<String>();
+                cursor.x -= 1;
+                *matches = self.history.reverse_search(regex);
+                *preview = if matches.is_empty() {
+                    Cmd::default()
+                } else {
+                    let hidx = matches[*current];
+                    self.history[hidx].clone()
+                };
+            },
         }
         Ok(())
     }
@@ -642,6 +895,31 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 });
                 self.cmd_rm_grapheme_at_cursor()?;
             }
+            State::Search(SearchState {
+                regex,
+                backup: _,
+                preview,
+                cursor,
+                matches,
+                current,
+            }) => {
+                let prompt_len = self.reverse_search_prompt.len();
+                let rmidx = cursor.x as usize - prompt_len;
+                let is_end_of_regex_line = rmidx == regex.graphemes(true).count();
+                if regex.len() == 0 || is_end_of_regex_line {
+                    return Ok(()); // NOP
+                }
+                let mut re: Vec<&str> = regex.graphemes(true).collect();
+                re.remove(cursor.x as usize - prompt_len);
+                *regex = re.into_iter().collect::<String>();
+                *matches = self.history.reverse_search(regex);
+                *preview = if matches.is_empty() {
+                    Cmd::default()
+                } else {
+                    let hidx = matches[*current];
+                    self.history[hidx].clone()
+                };
+            }
         }
         Ok(())
     }
@@ -662,6 +940,13 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 *cursor = Coords::EDITOR_ORIGIN;
             }
             State::Navigate(NavigateState { preview, cursor, .. }) => {
+                self.state = State::Edit(EditState {
+                    buffer: std::mem::take(preview),
+                    cursor: *cursor,
+                });
+                self.cmd_eval()?;
+            }
+            State::Search(SearchState { preview, cursor, .. }) => {
                 self.state = State::Edit(EditState {
                     buffer: std::mem::take(preview),
                     cursor: *cursor,
@@ -711,6 +996,7 @@ impl std::ops::Sub<Self> for Coords {
 enum State {
     Edit(EditState),
     Navigate(NavigateState),
+    Search(SearchState),
 }
 
 /// Editing a `Cmd`
@@ -733,4 +1019,21 @@ struct NavigateState {
     preview: Cmd,
     /// The cursor position within the Cmd preview buffer
     cursor: Coords,
+}
+
+/// Searching backwards through the History for entries that match a regex
+#[derive(Debug)]
+struct SearchState {
+    /// The regex being searched for
+    regex: String,
+    /// A buffer containing the Cmd that was last edited
+    backup: Cmd,
+    /// The `History` entry being previewed
+    preview: Cmd,
+    /// The cursor position within the Cmd buffer
+    cursor: Coords,
+    /// The `History` entries that match `regex`
+    matches: Vec<HistIdx>,
+    /// The current entry in `self.matches`
+    current: usize,
 }

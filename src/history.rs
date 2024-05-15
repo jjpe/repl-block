@@ -6,6 +6,7 @@ use crate::{
     error::ReplBlockResult,
 };
 use itertools::Itertools;
+use regex::Regex;
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
@@ -75,17 +76,31 @@ impl History {
             .collect();
     }
 
-    pub fn count_cmds(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.cmds.len()
     }
 
     pub fn max_idx(&self) -> Option<HistIdx> {
-        let num_cmds = self.count_cmds();
+        let num_cmds = self.len();
         if num_cmds > 0 {
             Some(HistIdx::from(num_cmds - 1))
         } else {
             None
         }
+    }
+
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (HistIdx, &Cmd)> {
+        self.cmds.iter().enumerate()
+            .map(|(hidx, cmd)| (HistIdx(hidx), cmd))
+    }
+
+    pub fn reverse_search(&self, regex: &str) -> Vec<HistIdx> {
+        let Ok(regex) = Regex::new(regex) else { return vec![/*no matches*/] };
+        self.iter().rev(/*most recent first*/)
+            .map(|(hidx, cmd)| (hidx, cmd, cmd.to_source_code()))
+            .filter(|(_, _, src)| regex.is_match(&src))
+            .map(|(hidx, _, _)| hidx)
+            .collect()
     }
 }
 
