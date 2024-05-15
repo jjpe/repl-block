@@ -203,7 +203,7 @@ impl<'eval, W: Write> Repl<'eval, W> {
 }
 
 impl<'eval, W: Write> Repl<'eval, W> {
-    pub fn run_event_loop(&mut self) -> ReplBlockResult<()> {
+    pub fn start(&mut self) -> ReplBlockResult<()> {
         loop {
             let old_height = self.height;
             self.dispatch_key_event()?; // This might alter `self.height`
