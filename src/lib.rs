@@ -11,4 +11,5 @@ pub mod prelude {
         editor::{Editor, EditorBuilder},
         error::{ReplBlockError, ReplBlockResult},
     };
+    pub use crossterm::style::{Color, Stylize};
 }
