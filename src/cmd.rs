@@ -1,6 +1,6 @@
 //!
 
-use crate::editor::Coords;
+use crate::repl::{Coords, ORIGIN};
 use unicode_segmentation::UnicodeSegmentation;
 
 
@@ -126,14 +126,14 @@ impl Cmd {
     // edits e.g. insertions.
     pub(crate) fn uncompress(
         &self,
-        // The width (in columns) of the Editor
-        editor_width: u16,
+        // The width (in columns) of the repl
+        repl_width: u16,
         // The length of the prompt
         prompt_len: u16,
     ) -> Self {
         Self {
             lines: self.lines().iter()
-                .flat_map(|line| line.uncompress(editor_width, prompt_len))
+                .flat_map(|line| line.uncompress(repl_width, prompt_len))
                 .collect()
         }
     }
@@ -153,7 +153,7 @@ impl Cmd {
                 x: last.count_graphemes(),
                 y: self.max_line_idx().unwrap() as u16,
             })
-            .unwrap_or(Coords::EDITOR_ORIGIN)
+            .unwrap_or(ORIGIN)
     }
 
     pub fn to_source_code(&self) -> String {
@@ -353,8 +353,8 @@ impl Line {
 
     pub(crate) fn uncompress(
         &self,
-        // The width (in columns) of the Editor
-        editor_width: u16,
+        // The width (in columns) of the repl
+        repl_width: u16,
         // The length of the prompt
         prompt_len: u16,
     ) -> Vec<Self> {
@@ -367,7 +367,7 @@ impl Line {
 
         let mut lline0 = Line::new(self.kind);
         let start = if self.is_start() { prompt_len } else { 0 };
-        for _ in start..editor_width {
+        for _ in start..repl_width {
             let Some(g) = graphemes.next() else { break };
             lline0.push_str(g);
         }
@@ -377,7 +377,7 @@ impl Line {
 
         'continue_lines: loop {
             let mut lline = Line::new_overflow();
-            for _ in 0 .. editor_width {
+            for _ in 0 .. repl_width {
                 let Some(g) = graphemes.next() else { break };
                 lline.push_str(g);
             }

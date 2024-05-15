@@ -20,7 +20,7 @@ use unicode_segmentation::UnicodeSegmentation;
 type Evaluator<'eval> =
     dyn for<'src> FnMut(&'src str) -> ReplBlockResult<()> + 'eval;
 
-pub struct EditorBuilder<'eval, W: Write> {
+pub struct ReplBuilder<'eval, W: Write> {
     sink: W,
     default_prompt: Vec<StyledContent<char>>,
     continue_prompt: Vec<StyledContent<char>>,
@@ -31,13 +31,13 @@ pub struct EditorBuilder<'eval, W: Write> {
     goodbye_msg: String,
 }
 
-impl<'eval> Default for EditorBuilder<'eval, Stdout> {
-    fn default() -> EditorBuilder<'eval, Stdout> {
+impl<'eval> Default for ReplBuilder<'eval, Stdout> {
+    fn default() -> ReplBuilder<'eval, Stdout> {
         #[inline(always)]
         fn nop<'eval>() -> Box<Evaluator<'eval>> {
             Box::new(|_| Ok(()))
         }
-        EditorBuilder {
+        ReplBuilder {
             sink: std::io::stdout(),
             default_prompt:  vec!['■'.yellow(), '>'.green().bold(), ' '.reset()],
             continue_prompt: vec!['ꞏ'.yellow(), 'ꞏ'.yellow(),       ' '.reset()],
@@ -67,9 +67,9 @@ impl<'eval> Default for EditorBuilder<'eval, Stdout> {
     }
 }
 
-impl<'eval, W: Write> EditorBuilder<'eval, W> {
-    pub fn sink<S: Write>(self, sink: S) -> EditorBuilder<'eval, S> {
-        EditorBuilder {
+impl<'eval, W: Write> ReplBuilder<'eval, W> {
+    pub fn sink<S: Write>(self, sink: S) -> ReplBuilder<'eval, S> {
+        ReplBuilder {
             sink,
             default_prompt: self.default_prompt,
             continue_prompt: self.continue_prompt,
@@ -119,12 +119,12 @@ impl<'eval, W: Write> EditorBuilder<'eval, W> {
         self
     }
 
-    pub fn build(self) -> ReplBlockResult<Editor<'eval, W>> {
+    pub fn build(self) -> ReplBlockResult<Repl<'eval, W>> {
         assert_eq!(
             self.default_prompt.len(), self.continue_prompt.len(),
             "default_prompt.len() != continue_prompt.len()"
         );
-        let mut editor = Editor::new(
+        let mut repl = Repl::new(
             self.sink,
             self.history_filepath,
             self.evaluator,
@@ -134,15 +134,15 @@ impl<'eval, W: Write> EditorBuilder<'eval, W> {
             self.hello_msg,
             self.goodbye_msg,
         )?;
-        editor.render_default_prompt()?;
-        editor.sink.flush()?;
-        Ok(editor)
+        repl.render_default_prompt()?;
+        repl.sink.flush()?;
+        Ok(repl)
     }
 }
 
 
 
-pub struct Editor<'eval, W: Write> {
+pub struct Repl<'eval, W: Write> {
     sink: W,
     state: State,
     /// The height of the input area, in lines
@@ -163,7 +163,7 @@ pub struct Editor<'eval, W: Write> {
     goodbye_msg: String,
 }
 
-impl<'eval, W: Write> Editor<'eval, W> {
+impl<'eval, W: Write> Repl<'eval, W> {
     fn new(
         mut sink: W,
         history_filepath: impl AsRef<Utf8Path>,
@@ -173,13 +173,13 @@ impl<'eval, W: Write> Editor<'eval, W> {
         reverse_search_prompt: Vec<StyledContent<char>>,
         hello_msg: String,
         goodbye_msg: String,
-    ) -> ReplBlockResult<Editor<'eval, W>> {
+    ) -> ReplBlockResult<Repl<'eval, W>> {
         sink.flush()?;
-        let mut editor = Self {
+        let mut repl = Self {
             sink,
             state: State::Edit(EditState {
                 buffer: Cmd::default(),
-                cursor: Coords::EDITOR_ORIGIN,
+                cursor: ORIGIN,
             }),
             height: 1,
             history: History::read_from_file(history_filepath.as_ref())?,
@@ -192,17 +192,17 @@ impl<'eval, W: Write> Editor<'eval, W> {
             goodbye_msg,
         };
         execute!(
-            editor.sink,
+            repl.sink,
             cursor::SetCursorStyle::BlinkingBar,
             cursor::MoveToColumn(0),
-            style::Print(&editor.hello_msg),
+            style::Print(&repl.hello_msg),
             style::Print("\n"),
         )?;
-        Ok(editor)
+        Ok(repl)
     }
 }
 
-impl<'eval, W: Write> Editor<'eval, W> {
+impl<'eval, W: Write> Repl<'eval, W> {
     pub fn run_event_loop(&mut self) -> ReplBlockResult<()> {
         loop {
             let old_height = self.height;
@@ -253,13 +253,13 @@ impl<'eval, W: Write> Editor<'eval, W> {
         Ok(())
     }
 
-    fn render_ui(&mut self, old_editor_height: u16) -> ReplBlockResult<()> {
-        let editor_dims = self.dimensions()?;
+    fn render_ui(&mut self, old_input_area_height: u16) -> ReplBlockResult<()> {
+        let dims = self.input_area_dims()?;
         let prompt_len = self.prompt_len();
 
         let calculate_uncursor = |cmd: &Cmd, uncompressed: &Cmd, cursor: Coords| {
             let prev_unlines: Vec<Vec<Line>> = (0..cursor.y)
-                .map(|y| cmd[y].uncompress(editor_dims.width, prompt_len))
+                .map(|y| cmd[y].uncompress(dims.width, prompt_len))
                 .collect();
             let mut uncursor = Coords {
                 x: cursor.x,
@@ -268,10 +268,10 @@ impl<'eval, W: Write> Editor<'eval, W> {
                     .sum::<usize>() as u16,
             };
             let line = &cmd[cursor.y];
-            let unlines_for_line = line.uncompress(editor_dims.width, prompt_len);
+            let unlines_for_line = line.uncompress(dims.width, prompt_len);
             for unline in unlines_for_line.iter() {
                 let unline_len = unline.count_graphemes();
-                let width = std::cmp::min(editor_dims.width, unline_len);
+                let width = std::cmp::min(dims.width, unline_len);
                 if uncursor.x > width {
                     uncursor.x -= width;
                     uncursor.y += 1;
@@ -288,7 +288,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
         macro_rules! render {
             ($cmd:expr, $cursor:expr) => {{
                 let (cmd, cursor): (&Cmd, Coords) = ($cmd, $cursor);
-                let uncompressed = cmd.uncompress(editor_dims.width, prompt_len);
+                let uncompressed = cmd.uncompress(dims.width, prompt_len);
 
                 // Adjust the height of the input area
                 let num_unlines = uncompressed.count_lines() as u16;
@@ -299,7 +299,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 let uncursor = calculate_uncursor(cmd, &uncompressed, cursor);
 
                 // Scroll up the old output *BEFORE* clearing the input area
-                for _ in old_editor_height..content_height {
+                for _ in old_input_area_height..content_height {
                     queue!(self.sink, terminal::ScrollUp(1))?;
                 }
 
@@ -313,7 +313,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 //     style::Print(format!("CURSOR: {cursor}\n")),
                 //     style::Print(format!("UNCURSOR: {uncursor}\n")),
                 //     style::Print(format!("TERM DIMS: {:?}\n", terminal::size()?)),
-                //     style::Print(format!("EDITOR DIMS: {editor_dims:?}\n")),
+                //     style::Print(format!("INPUT AREA DIMS: {dims:?}\n")),
                 //     cursor::MoveDown(terminal::size().unwrap().1),
                 // )?;
 
@@ -339,7 +339,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
             }
             State::Search(SearchState { regex, preview, cursor, .. }) => {
                 let (cmd, cursor): (&Cmd, Coords) = (preview, *cursor);
-                let uncompressed = cmd.uncompress(editor_dims.width, prompt_len);
+                let uncompressed = cmd.uncompress(dims.width, prompt_len);
                 let regex = regex.clone();
 
                 // Adjust the height of the input area
@@ -349,7 +349,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 self.height = std::cmp::max(self.height, content_height);
 
                 // Scroll up the old output *BEFORE* clearing the input area
-                for _ in old_editor_height..content_height {
+                for _ in old_input_area_height..content_height {
                     queue!(self.sink, terminal::ScrollUp(1))?;
                 }
 
@@ -455,7 +455,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
 
     /// Return the (width, height) dimensions of `self`.
     /// The top left cell is represented `(1, 1)`.
-    fn dimensions(&self) -> ReplBlockResult<Dims> {
+    fn input_area_dims(&self) -> ReplBlockResult<Dims> {
         let (term_width, _term_height) = terminal::size()?;
         Ok(Dims { width: term_width, height: self.height })
     }
@@ -584,10 +584,10 @@ impl<'eval, W: Write> Editor<'eval, W> {
 
     fn cmd_nav_cmd_left(&mut self) -> ReplBlockResult<()> {
         let update_cursor = |cmd: &Cmd, cursor: &mut Coords| {
-            if *cursor == Coords::EDITOR_ORIGIN {
+            if *cursor == ORIGIN {
                 // NOP
             } else {
-                let is_start_of_cursor_line = cursor.x == Coords::EDITOR_ORIGIN.x;
+                let is_start_of_cursor_line = cursor.x == ORIGIN.x;
                 let has_prev_line = cursor.y >= 1;
                 if is_start_of_cursor_line && has_prev_line {
                     *cursor = Coords {
@@ -630,7 +630,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 let has_next_line = cursor.y + 1 < cmd.count_lines();
                 if is_end_of_cursor_line && has_next_line {
                     *cursor = Coords {
-                        x: Coords::EDITOR_ORIGIN.x,
+                        x: ORIGIN.x,
                         y: cursor.y + 1,
                     };
                 } else if is_end_of_cursor_line && !has_next_line {
@@ -664,10 +664,10 @@ impl<'eval, W: Write> Editor<'eval, W> {
     fn cmd_nav_to_start_of_cmd(&mut self) -> ReplBlockResult<()> {
         match &mut self.state {
             State::Edit(EditState { cursor, .. }) => {
-                *cursor = Coords::EDITOR_ORIGIN;
+                *cursor = ORIGIN;
             },
             State::Navigate(NavigateState { cursor, .. }) => {
-                *cursor = Coords::EDITOR_ORIGIN;
+                *cursor = ORIGIN;
             },
             State::Search(SearchState { cursor, .. }) => {
                 let prompt_len = self.reverse_search_prompt.len() as u16;
@@ -735,7 +735,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
                     self.history[matches[*current]].clone()
                 };
                 let prompt_len = self.reverse_search_prompt.len() as u16;
-                *cursor = Coords { x: prompt_len, y: Coords::EDITOR_ORIGIN.y };
+                *cursor = Coords { x: prompt_len, y: ORIGIN.y };
             }
         }
         Ok(())
@@ -743,7 +743,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
 
     /// Insert a char into the current cmd at cursor position.
     fn cmd_insert_char(&mut self, c: char) -> ReplBlockResult<()> {
-        let editor_dims = self.dimensions()?;
+        let dims = self.input_area_dims()?;
         match &mut self.state {
             State::Edit(EditState { buffer, cursor }) => {
                 buffer.insert_char(*cursor, c);
@@ -765,7 +765,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 current,
             }) => {
                 let prompt_len = self.reverse_search_prompt.len();
-                if regex.len() >= editor_dims.width as usize - prompt_len - 1 {
+                if regex.len() >= dims.width as usize - prompt_len - 1 {
                     return Ok(()); // NOP
                 }
                 let mut re: Vec<&str> = regex.graphemes(true).collect();
@@ -792,7 +792,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
             State::Edit(EditState { buffer, cursor }) => {
                 buffer.insert_empty_line(*cursor);
                 *cursor = Coords {
-                    x: Coords::EDITOR_ORIGIN.x,
+                    x: ORIGIN.x,
                     y: cursor.y + 1
                 };
             }
@@ -935,7 +935,7 @@ impl<'eval, W: Write> Editor<'eval, W> {
                 self.history.write_to_file(&self.history_filepath)?;
                 (*self.evaluator)(source_code.as_str())?;
                 self.height = 1; // reset
-                *cursor = Coords::EDITOR_ORIGIN;
+                *cursor = ORIGIN;
             }
             State::Navigate(NavigateState { preview, cursor, .. }) => {
                 self.state = State::Edit(EditState {
@@ -954,7 +954,6 @@ impl<'eval, W: Write> Editor<'eval, W> {
         }
         Ok(())
     }
-
 }
 
 #[derive(Clone, Copy,  Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -963,29 +962,11 @@ pub struct Dims { pub width: u16, pub height: u16 }
 #[derive(Clone, Copy,  Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Coords { pub x: u16, pub y: u16 }
 
-impl Coords {
-    pub(crate) const EDITOR_ORIGIN: Self = Self { x: 0, y: 0 };
-}
+pub(crate) const ORIGIN: Coords = Coords { x: 0, y: 0 };
 
 impl std::fmt::Display for Coords {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}, {})", self.x, self.y)
-    }
-}
-
-impl std::ops::Add<Self> for Coords {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self { x: self.x + rhs.x, y: self.y + rhs.y }
-    }
-}
-
-impl std::ops::Sub<Self> for Coords {
-    type Output = Self;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        Self { x: self.x - rhs.x, y: self.y - rhs.y }
     }
 }
 

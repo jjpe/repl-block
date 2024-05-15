@@ -1,14 +1,14 @@
 //!
 
 mod cmd;
-mod editor;
+mod repl;
 mod error;
 mod history;
 mod macros;
 
 pub mod prelude {
     pub use crate::{
-        editor::{Editor, EditorBuilder},
+        repl::{Repl, ReplBuilder},
         error::{ReplBlockError, ReplBlockResult},
     };
     pub use crossterm::style::{Color, Stylize};
