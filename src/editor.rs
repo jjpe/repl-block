@@ -13,8 +13,6 @@ use crossterm::{
     style::{Stylize, StyledContent},
     terminal::ClearType,
 };
-use itertools::Itertools;
-use regex::Regex;
 use std::io::{Stdout, Write};
 use unicode_segmentation::UnicodeSegmentation;
 
