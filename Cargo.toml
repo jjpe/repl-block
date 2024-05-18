@@ -5,6 +5,7 @@ edition = "2021"
 authors = ["Joey Ezechiels"]
 description = "A crossterm-based library for building Read-Eval-Print-Loops (REPLs)."
 license = "MIT OR Apache-2.0"
+rust-version = "1.68.2"
 
 [dependencies]
 camino = "1.1.6"
