@@ -55,7 +55,7 @@ impl History {
             .truncate(true)
             .write(true)
             .open(path.as_ref())?;
-        let json: String = serde_json::to_string_pretty(&self)?;
+        let json: String = serde_json::to_string_pretty(&self.trimmed())?;
         file.write_all(json.as_bytes())?;
         Ok(())
     }
@@ -66,14 +66,17 @@ impl History {
         idx
     }
 
-    // TODO: use this
-    pub fn trim_cmds(&mut self) {
-        self.cmds = self.cmds.drain(..)
+    pub fn trimmed(&self) -> Self {
+        let mut cmds = VecDeque::new();
+        let source = self.cmds.iter()
             .rev()
             .unique() // purge the non-newest non-unique cmds
-            .rev()
             .take(Self::UPPER_LIMIT)
-            .collect();
+            .cloned();
+        for cmd in source {
+            cmds.push_front(cmd);
+        }
+        Self { cmds }
     }
 
     pub fn len(&self) -> usize {
