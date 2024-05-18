@@ -16,7 +16,7 @@ a.k.a. REPL.
 Add a dependency on this crate to your project's `Cargo.toml`:
 ``` toml
 [dependencies]
-repl-block= "0.5.0"
+repl-block= "0.6.0"
 ```
 
 Then one can use the `ReplBuilder` type to build an start a REPL like this:

@@ -1,6 +1,6 @@
 [package]
 name = "repl-block"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 authors = ["Joey Ezechiels"]
 description = "A crossterm-based library for building Read-Eval-Print-Loops (REPLs)."
