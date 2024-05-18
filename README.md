@@ -1,10 +1,9 @@
 # repl-block
 
-[![crates.io](https://img.shields.io/crates/v/repl-block?label=latest)](https://crates.io/crates/repl-block)
+[![crates.io](https://img.shields.io/crates/v/repl-block?label=repl-block)](https://crates.io/crates/repl-block)
 [![Documentation](https://docs.rs/repl-block/badge.svg)](https://docs.rs/repl-block/latest)
 ![Rust](https://github.com/jjpe/repl-block/workflows/Rust/badge.svg)
-[![](https://img.shields.io/crates/v/repl-block?label=repl-block)](https://crates.io/crates/repl-block)
-![](https://img.shields.io/badge/rustc-1.26+-darkcyan.svg)
+![](https://img.shields.io/badge/rustc-1.68.2+-red.svg)
 ![](https://img.shields.io/crates/l/repl-block)
 
 ## Synopsis
