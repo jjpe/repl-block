@@ -59,7 +59,7 @@ impl<'eval> Default for ReplBuilder<'eval, Stdout> {
                 ':'.blue().italic(),
                 ' '.reset(),
             ],
-            history_filepath: Utf8PathBuf::new(),
+            history_filepath: Utf8PathBuf::from(".repl.history"),
             evaluator: nop(),
             hello_msg: format!("🖐 Press {} to exit.",  "Ctrl-D".magenta()),
             goodbye_msg: "👋".to_string(),
