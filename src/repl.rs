@@ -40,7 +40,7 @@ impl<'eval> Default for ReplBuilder<'eval, Stdout> {
         ReplBuilder {
             sink: std::io::stdout(),
             default_prompt:  vec!['■'.yellow(), '>'.green().bold(), ' '.reset()],
-            continue_prompt: vec!['ꞏ'.yellow(), 'ꞏ'.yellow(),       ' '.reset()],
+            continue_prompt: vec!['.'.yellow(), '.'.yellow(),       ' '.reset()],
             reverse_search_prompt: vec![
                 'r'.yellow().italic(),
                 'e'.yellow().italic(),
