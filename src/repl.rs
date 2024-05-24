@@ -509,9 +509,10 @@ impl<'eval, W: Write> Repl<'eval, W> {
     }
 
     fn cmd_nav_up(&mut self) -> ReplBlockResult<()> {
+        let is_at_top_line = |cursor: Coords| cursor.y == ORIGIN.x;
         match &mut self.state {
             State::Edit(EditState { buffer, cursor }) => {
-                if cursor.y == ORIGIN.y {
+                if is_at_top_line(*cursor) {
                     self.cmd_nav_history_up()?;
                 } else {
                     cursor.y -= 1;
@@ -520,7 +521,7 @@ impl<'eval, W: Write> Repl<'eval, W> {
                 }
             }
             State::Navigate(NavigateState { preview, cursor, .. }) => {
-                if cursor.y == ORIGIN.y {
+                if is_at_top_line(*cursor) {
                     self.cmd_nav_history_up()?;
                 } else {
                     cursor.y -= 1;
@@ -529,7 +530,7 @@ impl<'eval, W: Write> Repl<'eval, W> {
                 }
             }
             State::Search(SearchState { preview, cursor, .. }) => {
-                if cursor.y == ORIGIN.y {
+                if is_at_top_line(*cursor) {
                     self.cmd_nav_history_up()?;
                 } else {
                     cursor.y -= 1;
@@ -542,10 +543,10 @@ impl<'eval, W: Write> Repl<'eval, W> {
     }
 
     fn cmd_nav_down(&mut self) -> ReplBlockResult<()> {
-        let input_area_height = self.input_area_dims()?.height;
+        let is_at_bottom_line = |cursor: Coords, cmd: &Cmd| cursor.y == cmd.count_lines() - 1;
         match &mut self.state {
             State::Edit(EditState { buffer, cursor }) => {
-                if cursor.y == input_area_height {
+                if is_at_bottom_line(*cursor, buffer) {
                     self.cmd_nav_history_down()?;
                 } else {
                     cursor.y += 1;
@@ -554,7 +555,7 @@ impl<'eval, W: Write> Repl<'eval, W> {
                 }
             }
             State::Navigate(NavigateState { preview, cursor, .. }) => {
-                if cursor.y == input_area_height {
+                if is_at_bottom_line(*cursor, preview) {
                     self.cmd_nav_history_down()?;
                 } else {
                     cursor.y += 1;
@@ -563,7 +564,7 @@ impl<'eval, W: Write> Repl<'eval, W> {
                 }
             }
             State::Search(SearchState { preview, cursor, .. }) => {
-                if cursor.y == input_area_height {
+                if is_at_bottom_line(*cursor, preview) {
                     self.cmd_nav_history_down()?;
                 } else {
                     cursor.y += 1;
