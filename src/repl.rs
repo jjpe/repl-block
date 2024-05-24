@@ -224,10 +224,10 @@ impl<'eval, W: Write> Repl<'eval, W> {
             Event::Key(key!(@name Enter)) => self.cmd_eval()?,
 
             // Navigation:
-            Event::Key(key!(CONTROL-'p')) => self.cmd_nav_history_up()?,
-            Event::Key(key!(@name Up))    => self.cmd_nav_history_up()?,
-            Event::Key(key!(CONTROL-'n')) => self.cmd_nav_history_down()?,
-            Event::Key(key!(@name Down))  => self.cmd_nav_history_down()?,
+            Event::Key(key!(CONTROL-'p')) => self.cmd_nav_up()?,
+            Event::Key(key!(@name Up))    => self.cmd_nav_up()?,
+            Event::Key(key!(CONTROL-'n')) => self.cmd_nav_down()?,
+            Event::Key(key!(@name Down))  => self.cmd_nav_down()?,
             Event::Key(key!(CONTROL-'b')) => self.cmd_nav_cmd_left()?,
             Event::Key(key!(@name Left))  => self.cmd_nav_cmd_left()?,
             Event::Key(key!(CONTROL-'f')) => self.cmd_nav_cmd_right()?,
@@ -508,7 +508,73 @@ impl<'eval, W: Write> Repl<'eval, W> {
         Ok(())
     }
 
-    /// Navigate up in the History
+    fn cmd_nav_up(&mut self) -> ReplBlockResult<()> {
+        match &mut self.state {
+            State::Edit(EditState { buffer, cursor }) => {
+                if cursor.y == ORIGIN.y {
+                    self.cmd_nav_history_up()?;
+                } else {
+                    cursor.y -= 1;
+                    let line_len = buffer[cursor.y].count_graphemes();
+                    cursor.x = std::cmp::min(cursor.x, line_len);
+                }
+            }
+            State::Navigate(NavigateState { preview, cursor, .. }) => {
+                if cursor.y == ORIGIN.y {
+                    self.cmd_nav_history_up()?;
+                } else {
+                    cursor.y -= 1;
+                    let line_len = preview[cursor.y].count_graphemes();
+                    cursor.x = std::cmp::min(cursor.x, line_len);
+                }
+            }
+            State::Search(SearchState { preview, cursor, .. }) => {
+                if cursor.y == ORIGIN.y {
+                    self.cmd_nav_history_up()?;
+                } else {
+                    cursor.y -= 1;
+                    let line_len = preview[cursor.y].count_graphemes();
+                    cursor.x = std::cmp::min(cursor.x, line_len);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn cmd_nav_down(&mut self) -> ReplBlockResult<()> {
+        let input_area_height = self.input_area_dims()?.height;
+        match &mut self.state {
+            State::Edit(EditState { buffer, cursor }) => {
+                if cursor.y == input_area_height {
+                    self.cmd_nav_history_down()?;
+                } else {
+                    cursor.y += 1;
+                    let line_len = buffer[cursor.y].count_graphemes();
+                    cursor.x = std::cmp::min(cursor.x, line_len);
+                }
+            }
+            State::Navigate(NavigateState { preview, cursor, .. }) => {
+                if cursor.y == input_area_height {
+                    self.cmd_nav_history_down()?;
+                } else {
+                    cursor.y += 1;
+                    let line_len = preview[cursor.y].count_graphemes();
+                    cursor.x = std::cmp::min(cursor.x, line_len);
+                }
+            }
+            State::Search(SearchState { preview, cursor, .. }) => {
+                if cursor.y == input_area_height {
+                    self.cmd_nav_history_down()?;
+                } else {
+                    cursor.y += 1;
+                    let line_len = preview[cursor.y].count_graphemes();
+                    cursor.x = std::cmp::min(cursor.x, line_len);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn cmd_nav_history_up(&mut self) -> ReplBlockResult<()> {
         match &mut self.state {
             State::Edit(EditState { buffer, cursor: _ }) => {
