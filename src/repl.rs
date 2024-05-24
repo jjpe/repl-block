@@ -529,14 +529,8 @@ impl<'eval, W: Write> Repl<'eval, W> {
                     cursor.x = std::cmp::min(cursor.x, line_len);
                 }
             }
-            State::Search(SearchState { preview, cursor, .. }) => {
-                if is_at_top_line(*cursor) {
-                    self.cmd_nav_history_up()?;
-                } else {
-                    cursor.y -= 1;
-                    let line_len = preview[cursor.y].count_graphemes();
-                    cursor.x = std::cmp::min(cursor.x, line_len);
-                }
+            State::Search(SearchState { .. }) => {
+                self.cmd_nav_history_up()?;
             }
         }
         Ok(())
@@ -563,14 +557,8 @@ impl<'eval, W: Write> Repl<'eval, W> {
                     cursor.x = std::cmp::min(cursor.x, line_len);
                 }
             }
-            State::Search(SearchState { preview, cursor, .. }) => {
-                if is_at_bottom_line(*cursor, preview) {
-                    self.cmd_nav_history_down()?;
-                } else {
-                    cursor.y += 1;
-                    let line_len = preview[cursor.y].count_graphemes();
-                    cursor.x = std::cmp::min(cursor.x, line_len);
-                }
+            State::Search(SearchState { .. }) => {
+                self.cmd_nav_history_down()?;
             }
         }
         Ok(())
