@@ -985,6 +985,10 @@ impl<'eval, W: Write> Repl<'eval, W> {
                 if source_code.is_empty() {
                     return Ok(());
                 }
+                { // Ensure output is wrrten on a new line
+                    writeln!(self.sink)?;
+                    self.sink.flush()?;
+                }
                 let cmd = std::mem::take(buffer);
                 let _hidx = self.history.add_cmd(cmd);
                 self.history.write_to_file(&self.history_filepath)?;
