@@ -6,7 +6,7 @@ authors = ["Joey Ezechiels"]
 description = "A crossterm-based library for building Read-Eval-Print-Loops (REPLs)."
 repository = "https://github.com/jjpe/repl-block.git"
 license = "MIT OR Apache-2.0"
-rust-version = "1.68.2"
+rust-version = "1.75.0"
 
 [dependencies]
 camino = "1.1.6"
